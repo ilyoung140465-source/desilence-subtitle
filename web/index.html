@@ -1,0 +1,1365 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>무음 제거 + 자막 편집</title>
+<style>
+  :root{
+    --bg:#14161a; --panel:#1c1f26; --panel2:#232730; --line:#2f3542;
+    --fg:#e6e9ef; --dim:#98a2b3; --accent:#4da3ff; --cut:#ff5470;
+    --ok:#3ddc97; --cue:#b34a3f; --cueSel:#ff8a5c; --head:#ffd166;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:14px/1.55 "Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif}
+  header{padding:16px 22px;border-bottom:1px solid var(--line);display:flex;
+         align-items:baseline;gap:12px;flex-wrap:wrap}
+  h1{font-size:17px;margin:0;font-weight:600}
+  header small{color:var(--dim)}
+  main{padding:18px 22px 60px;max-width:1600px;margin:0 auto}
+  .drop{border:2px dashed var(--line);border-radius:12px;padding:22px;text-align:center;
+        color:var(--dim);cursor:pointer;transition:.15s;background:var(--panel)}
+  .drop:hover,.drop.over{border-color:var(--accent);color:var(--fg);background:var(--panel2)}
+  .drop b{color:var(--fg)}
+  .files{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+  .chip{background:var(--panel2);border:1px solid var(--line);border-radius:999px;
+        padding:5px 13px;font-size:12.5px;color:var(--dim)}
+  .chip b{color:var(--fg);font-weight:500}
+  section{margin-top:16px;background:var(--panel);border:1px solid var(--line);
+          border-radius:12px;padding:14px 18px}
+  section h2{font-size:12px;margin:0 0 12px;color:var(--dim);font-weight:600;
+             letter-spacing:.05em;text-transform:uppercase}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px 22px}
+  label.f{display:block;font-size:12.5px;color:var(--dim);margin-bottom:5px}
+  label.f span{float:right;color:var(--fg);font-variant-numeric:tabular-nums}
+  .num{float:right;width:78px;background:#0f1114;color:var(--fg);border:1px solid var(--line);
+       border-radius:6px;padding:2px 6px;font:inherit;font-size:12.5px;text-align:right;
+       font-variant-numeric:tabular-nums}
+  .num:focus{outline:none;border-color:var(--accent)}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+         border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px;font-family:inherit}
+  button:hover:not(:disabled){border-color:var(--accent)}
+  button:disabled{opacity:.35;cursor:default}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#06121f;font-weight:600}
+  .toggle{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--dim);cursor:pointer}
+  .stats{display:flex;gap:24px;flex-wrap:wrap;margin-top:10px;font-size:13px}
+  .stats span{color:var(--dim);margin-right:6px}
+  .stats b{font-variant-numeric:tabular-nums}
+
+  /* ---- 타임라인 ---- */
+  #scroller{overflow-x:auto;overflow-y:hidden;border-radius:8px;background:#0f1114;
+            border:1px solid var(--line);position:relative}
+  #inner{position:relative}
+  #cv{display:block;height:132px;position:absolute;top:0;left:0}
+  #track{position:absolute;left:0;outline:none}
+  .cue{position:absolute;background:var(--cue);border-radius:4px;
+       border:1px solid rgba(0,0,0,.45);color:#fff;font-size:11.5px;line-height:1.25;
+       padding:4px 7px;overflow:hidden;cursor:grab;user-select:none;
+       display:flex;align-items:center;white-space:nowrap;text-overflow:ellipsis}
+  .cue.sel{background:var(--cueSel);border-color:#fff;color:#241000;z-index:3;font-weight:600}
+  .cue.ov{box-shadow:0 0 0 1px var(--head) inset}
+  .cue.ref{background:#2f5d7c;border-color:rgba(0,0,0,.5);cursor:pointer}
+  .cue.ref:hover{background:#3a7099}
+  .cue .h{position:absolute;top:0;width:8px;height:100%;cursor:ew-resize}
+  .cue .h.l{left:-1px} .cue .h.r{right:-1px}
+  .cue:hover .h{background:rgba(255,255,255,.35)}
+  #head{position:absolute;top:0;width:2px;background:var(--head);
+        pointer-events:none;z-index:5;box-shadow:0 0 6px rgba(255,209,102,.6)}
+  #ovInfo{color:var(--head);font-size:12.5px;margin-top:8px}
+  .tlbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .tlbar .t{font-variant-numeric:tabular-nums;color:var(--dim);font-size:13px;min-width:120px}
+  .tlbar input[type=range]{width:150px}
+
+  /* ---- 인스펙터 ---- */
+  #insp{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:start}
+  #cueText{width:100%;min-height:62px;background:#0f1114;color:var(--fg);resize:vertical;
+           border:1px solid var(--line);border-radius:8px;padding:9px 11px;
+           font-family:inherit;font-size:14px;line-height:1.5}
+  #cueText:focus{outline:none;border-color:var(--accent)}
+  .times{display:flex;gap:14px;font-size:12.5px;color:var(--dim);margin-top:7px;
+         font-variant-numeric:tabular-nums}
+  .times b{color:var(--fg)}
+  .keys{color:var(--dim);font-size:12px;margin-top:10px}
+  kbd{background:var(--panel2);border:1px solid var(--line);border-bottom-width:2px;
+      border-radius:4px;padding:1px 6px;font-size:11px;font-family:inherit}
+  .hint{color:var(--dim);font-size:12.5px;margin-top:9px;white-space:pre-line}
+  .legend{font-size:12px;color:var(--dim);margin-top:8px}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;
+            background:var(--cut);margin-right:5px;vertical-align:-1px}
+  .hidden{display:none}
+  #diagList table{width:100%;border-collapse:collapse;font-size:12.5px}
+  #diagList th{position:sticky;top:0;background:var(--panel2);color:var(--dim);
+               text-align:left;padding:6px 10px;font-weight:600}
+  #diagList td{padding:5px 10px;border-top:1px solid var(--line);cursor:pointer}
+  #diagList tr:hover td{background:var(--panel2)}
+  #diagList td.d{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  #diagList tr.warn td.d{color:var(--head);font-weight:600}
+  #diagList tr.bad  td.d{color:var(--cut);font-weight:600}
+</style>
+</head>
+<body>
+<header>
+  <h1>무음 제거 + 자막 편집</h1>
+  <small>파일은 브라우저 안에서만 처리됩니다 · 업로드 없음</small>
+  <small id="verTag" style="margin-left:auto;color:var(--dim)"></small>
+</header>
+
+<main>
+  <div class="drop" id="drop">
+    <b>오디오와 SRT 파일을 여기에 끌어놓거나 클릭</b><br>
+    자막 파일(<code>.srt</code>) 대신 <b>대본 텍스트(<code>.txt</code>)</b> 를 넣어도 됩니다 — 시각은 음성 인식으로 채웁니다.<br>두 개를 한 번에 넣어도 됩니다. 이미 정리한 <code>_clean</code> 파일을 넣고 자막만 다듬어도 됩니다.
+    <input type="file" id="picker" class="hidden" multiple
+           accept="audio/*,.srt,.txt,.md,.mp3,.wav,.m4a,.aac,.flac,.ogg" autocomplete="off">
+  </div>
+  <div class="files" id="files"></div>
+
+  <section id="ui" class="hidden">
+    <h2>무음 제거 설정</h2>
+    <div class="grid">
+      <div>
+        <label class="f">무음 임계값 <input type="number" id="nthr" class="num" min="-70" max="-15" step="1" autocomplete="off"></label>
+        <input type="range" id="thr" min="-70" max="-15" step="1" value="-30" autocomplete="off">
+        <label class="toggle" style="margin-top:5px">
+          <input type="checkbox" id="autoThr" autocomplete="off"> 자동으로 계산
+        </label>
+      </div>
+      <div>
+        <label class="f">최소 무음 길이 <input type="number" id="nminSil" class="num" min="0.05" max="3" step="0.01" autocomplete="off"></label>
+        <input type="range" id="minSil" min="0.05" max="2" step="0.05" value="0.10" autocomplete="off">
+      </div>
+      <div>
+        <label class="f">남길 여백 (앞뒤 각각) <input type="number" id="nkeep" class="num" min="0" max="1" step="0.01" autocomplete="off"></label>
+        <input type="range" id="keep" min="0" max="0.6" step="0.01" value="0.05" autocomplete="off">
+      </div>
+      <div>
+        <label class="f">자막 최대 글자 수 <input type="number" id="nchars" class="num" min="4" max="40" step="1" autocomplete="off"></label>
+        <input type="range" id="chars" min="6" max="24" step="1" value="10" autocomplete="off">
+        <label class="toggle" style="margin-top:5px">
+          <input type="checkbox" id="fill" checked autocomplete="off"> 자막 빈틈 없이 붙이기
+        </label>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <label class="toggle">
+        <input type="checkbox" id="noCut" autocomplete="off"> 무음 제거 안 함 (자막만 편집)
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="asIs" autocomplete="off"> 자막 그대로 (다시 나누지 않음)
+      </label>
+      <button id="redo">설정대로 자막 다시 만들기</button>
+    </div>
+    <div class="stats">
+      <div><span>원본</span><b id="sOrig">–</b></div>
+      <div><span>편집 후</span><b id="sNew">–</b></div>
+      <div><span>단축</span><b id="sSaved" style="color:var(--ok)">–</b></div>
+      <div><span>잘라낸 구간</span><b id="sCuts">–</b></div>
+      <div><span>자막</span><b id="sCues">–</b></div>
+    </div>
+    <div class="legend"><i></i>파형의 빨간 영역이 삭제될 무음 구간</div>
+    <div class="hint" id="setInfo"></div>
+    <div class="hint" id="tightInfo"></div>
+  </section>
+
+  <section id="tlSec" class="hidden">
+    <h2>타임라인</h2>
+    <div class="tlbar">
+      <button id="play" class="primary">▶ 재생</button>
+      <button id="stop">■ 정지</button>
+      <button id="undo" disabled>↶ 되돌리기</button>
+      <button id="redoBtn" disabled>↷ 다시 실행</button>
+      <div class="t" id="clock">00:00.00 / 00:00.00</div>
+      <label class="f" style="margin:0;display:flex;align-items:center;gap:8px">
+        확대 <input type="range" id="zoom" min="20" max="400" step="5" value="120" autocomplete="off">
+      </label>
+      <label class="toggle"><input type="checkbox" id="follow" checked autocomplete="off"> 재생 따라가기</label>
+      <label class="f" style="margin:0;display:flex;align-items:center;gap:8px">
+        자막 밀기 <input type="range" id="offset" min="-400" max="400" step="10" value="0" autocomplete="off">
+        <b id="vOffset" style="color:var(--fg);font-variant-numeric:tabular-nums;min-width:52px">0 ms</b>
+        <button id="offReset" style="padding:4px 9px;font-size:12px">0</button>
+      </label>
+      <label class="f" style="margin:0;display:flex;align-items:center;gap:8px" 
+             title="원격 접속처럼 소리가 늦게 들릴 때 재생 바만 늦춥니다. 자막 파일에는 영향 없습니다.">
+        소리 지연 <input type="range" id="monLat" min="0" max="800" step="20" value="0" style="width:110px" autocomplete="off">
+        <b id="vMonLat" style="color:var(--dim);font-variant-numeric:tabular-nums;min-width:48px">0 ms</b>
+      </label>
+    </div>
+    <div id="scroller">
+      <div id="inner">
+        <canvas id="cv"></canvas>
+        <div id="track" tabindex="-1"></div>
+        <div id="head"></div>
+      </div>
+    </div>
+    <div class="hint">자막 블록을 클릭해 선택 · 좌우 끝을 끌어 길이 조절 · 가운데를 끌어 이동 · 파형을 클릭해 이동</div>
+    <div id="ovInfo"></div>
+    <div class="row" style="margin-top:10px">
+      <label class="toggle"><input type="checkbox" id="autoPlayCue" checked autocomplete="off">
+        ←/→ 로 자막을 옮길 때 그 구간을 바로 재생</label>
+      <label class="toggle"><input type="checkbox" id="showOnset" checked autocomplete="off">
+        파형에 소리 시작 지점 표시</label>
+      <button id="pickRef">비교용 SRT 불러오기</button>
+      <button id="clearRef" class="hidden">비교 자막 지우기</button>
+      <input type="file" id="refPicker" class="hidden" accept=".srt" autocomplete="off">
+    </div>
+    <div class="hint" id="diagMsg"></div>
+
+  </section>
+
+  <section id="editSec" class="hidden">
+    <h2>선택한 자막</h2>
+    <div id="insp">
+      <div>
+        <textarea id="cueText" placeholder="자막 블록을 클릭하면 여기서 내용을 고칠 수 있습니다"></textarea>
+        <div class="times">
+          <div><span>시작</span> <b id="cs">–</b></div>
+          <div><span>끝</span> <b id="ce">–</b></div>
+          <div><span>길이</span> <b id="cd">–</b></div>
+          <div><span>글자</span> <b id="cl">–</b></div>
+          <div><span>소리 시작과 차이</span> <b id="conset">–</b></div>
+        </div>
+      </div>
+      <div class="row" style="flex-direction:column;align-items:stretch;gap:7px;min-width:150px">
+        <button id="bSplit">재생헤드에서 나누기</button>
+        <button id="bMerge">다음 자막과 합치기</button>
+        <button id="bDel">이 자막 삭제</button>
+        <button id="bPlayCue">이 구간 재생</button>
+        <button id="bSnapOne">말 시작에 붙이기 (\)</button>
+      </div>
+    </div>
+    <div class="keys">
+      <kbd>Space</kbd> 재생/정지 · <kbd>S</kbd> 나누기 · <kbd>M</kbd> 합치기 ·
+      <kbd>Del</kbd> 삭제 · <kbd>[</kbd><kbd>]</kbd> 10ms 밀기 · <kbd>\</kbd> 말 시작에 붙이기 · <kbd>←</kbd><kbd>→</kbd> 이전/다음 자막 (그 구간 재생) · <kbd>Enter</kbd> 편집 후 적용
+    </div>
+  </section>
+
+  <section id="out" class="hidden">
+    <h2>내보내기</h2>
+    <div class="row">
+      <button id="dlAudio" class="primary">WAV 다운로드</button>
+      <button id="dlSrt">SRT 다운로드</button>
+    </div>
+    <div class="hint" id="srtInfo"></div>
+
+    <div id="engineBox" class="hidden" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
+      <div class="row">
+        <button id="bProcess">정밀 자막 만들기 (엔진)</button>
+        <label class="toggle"><input type="checkbox" id="autoProcess" checked autocomplete="off">
+          파일 넣으면 자동 실행</label>
+        <label class="toggle"
+               title="대본을 무시하고 인식한 말 그대로 자막을 만듭니다. 싱크는 완벽하지만 오타가 생깁니다.">
+          <input type="checkbox" id="asrMode" autocomplete="off"> 인식한 그대로 (대본 무시)</label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="bAlign">싱크만 보정</button>
+        <input id="ccName" autocomplete="off" placeholder="캡컷 프로젝트 이름" style="flex:1;min-width:180px;
+               background:#0f1114;color:var(--fg);border:1px solid var(--line);
+               border-radius:8px;padding:8px 11px;font-family:inherit;font-size:13px">
+        <select id="ccRatio" style="background:var(--panel2);color:var(--fg);
+                border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:inherit">
+          <option value="9:16">9:16</option><option value="1:1">1:1</option>
+          <option value="4:5">4:5</option><option value="16:9">16:9</option>
+        </select>
+        <button id="bCapcut" class="primary">캡컷으로 보내기</button>
+      </div>
+      <div class="hint" id="engineMsg"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const HOP_MS = 10, EDGE_SNAP = 0.5, MINCUE = 0.45;
+const WAVE_H = 132, ROW_H = 44, ROW_GAP = 4;
+
+let ctx, audioBuf, audioName = "", srtCues = null, srtName = "";
+let origFile = null, srtText = "", origUploadId = null, hasTimes = true;
+let analysis = null, newBuf = null, cues = [], sel = -1, edited = false;
+let src = null, playT0 = 0, playOff = 0, playing = false, rafId = 0, stopAt = null;
+let pps = 120;                                   // px per second
+let laneCount = 1, hist = [], future = [];
+
+/* 크롬은 새로고침 때 슬라이더 값을 복원한다. 기본값인 줄 알고 쓰는 사고를 막는다. */
+const DEFAULTS = {thr:-30, minSil:0.10, keep:0.05, chars:10, zoom:120, offset:0, monLat:0};
+const CHECK_DEFAULTS = {asrMode:false, autoThr:false, fill:true, noCut:false, asIs:false,
+                        follow:true, autoPlayCue:true, showOnset:true, autoProcess:true};
+function resetControls(){
+  for (const [id, v] of Object.entries(DEFAULTS)) if ($(id)) $(id).value = v;
+  for (const [id, v] of Object.entries(CHECK_DEFAULTS)) if ($(id)) $(id).checked = v;
+  syncNums();
+  $("vOffset").textContent = "0 ms";
+  $("vMonLat").textContent = "0 ms";
+}
+
+/* 지금 설정을 한 줄로 보여준다 (탭마다 다른 설정으로 헷갈리지 않게) */
+/* 슬라이더 <-> 숫자칸 양방향 연결 */
+const NUMS = [["thr","nthr"],["minSil","nminSil"],["keep","nkeep"],["chars","nchars"]];
+function syncNums(){
+  for (const [s, n] of NUMS) if ($(s) && $(n)) $(n).value = $(s).value;
+}
+NUMS.forEach(([s, n]) => {
+  const el = $(n); if (!el) return;
+  el.addEventListener("change", () => {
+    const sl = $(s);
+    let v = parseFloat(el.value);
+    if (isNaN(v)) { el.value = sl.value; return; }
+    v = Math.max(+sl.min, Math.min(+sl.max, v));   // 슬라이더 범위로 제한
+    el.value = v; sl.value = v;
+    sl.dispatchEvent(new Event("input"));
+    syncNums();
+  });
+  el.addEventListener("keydown", e => { if (e.key === "Enter") el.blur(); });
+});
+
+function settingsLine(){
+  return `임계값 ${$("autoThr").checked ? "자동" : $("thr").value + "dB"}`
+       + ` · 최소무음 ${(+$("minSil").value).toFixed(2)}s`
+       + ` · 여백 ${(+$("keep").value).toFixed(2)}s`
+       + ` · 최대 ${$("chars").value}자`;
+}
+
+/* ============================ 파일 입력 ============================ */
+const drop = $("drop"), picker = $("picker");
+drop.onclick = () => picker.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); handle(e.dataTransfer.files); };
+picker.onchange = () => handle(picker.files);
+
+async function handle(list){
+  for (const f of list){
+    if (/\.(srt|txt|md)$/i.test(f.name)) {
+      srtText = await readText(f); srtName = f.name;
+      hasTimes = /\.srt$/i.test(f.name);
+      srtCues = hasTimes ? parseSRT(srtText) : scriptToCues(srtText);
+    } else {
+      audioName = f.name; origFile = f; origUploadId = null;
+      ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+      audioBuf = await ctx.decodeAudioData(await f.arrayBuffer());
+    }
+  }
+  renderChips();
+  if (audioName && $("ccName") && !$("ccName").value)
+    $("ccName").value = (audioName.replace(/\.[^.]+$/, "") || "프로젝트").slice(0, 40);
+  if (audioBuf){
+    ["ui","tlSec","editSec","out"].forEach(id => $(id).classList.remove("hidden"));
+    edited = false; rebuild();
+    if (engine && srtText.trim() && $("autoProcess") && $("autoProcess").checked)
+      setTimeout(runEngine, 100);
+  }
+}
+function readText(file){
+  return new Promise(res => {
+    const r = new FileReader();
+    r.onload = () => {
+      const t = r.result;
+      if (/�/.test(t.slice(0, 4000))){
+        const r2 = new FileReader(); r2.onload = () => res(r2.result);
+        r2.readAsText(file, "euc-kr"); return;
+      }
+      res(t);
+    };
+    r.readAsText(file, "utf-8");
+  });
+}
+/* 대본 텍스트(.txt)를 문장 단위로 나눈다. 시각은 엔진이 음성 인식으로 채운다.
+   (엔진 없이 브라우저만으로는 시각을 만들 수 없어 화면에 안내만 띄운다) */
+function scriptToCues(text){
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const out = [];
+  for (const raw of lines){
+    const line = raw.trim();
+    if (!line || /^\d+$/.test(line) || line.includes("-->")) continue;
+    for (const part of line.split(/(?<=[.!?…])\s+/)){
+      const s = part.trim();
+      if (s) out.push({start: 0, end: 0, text: s});
+    }
+  }
+  return out;
+}
+
+function renderChips(){
+  $("files").innerHTML =
+    (audioName ? `<div class="chip">오디오 <b>${esc(audioName)}</b></div>` : "") +
+    (srtName   ? `<div class="chip">${hasTimes ? "자막" : "대본"} <b>${esc(srtName)}</b> · ${srtCues.length}${hasTimes ? "개" : "문장"}</div>` : "");
+}
+const esc = s => s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+/* ============================ 무음 감지 ============================ */
+function toMono(buf){
+  const n = buf.length, ch = buf.numberOfChannels, out = new Float32Array(n);
+  for (let c = 0; c < ch; c++){ const d = buf.getChannelData(c);
+    for (let i = 0; i < n; i++) out[i] += d[i]; }
+  if (ch > 1) for (let i = 0; i < n; i++) out[i] /= ch;
+  return out;
+}
+function frameDb(mono, sr){
+  const hop = Math.max(1, Math.round(sr * HOP_MS / 1000));
+  const n = Math.floor(mono.length / hop), db = new Float32Array(n || 1);
+  if (!n){ db[0] = -120; return {db, hop}; }
+  for (let f = 0; f < n; f++){
+    let s = 0;
+    for (let i = f*hop, e = i+hop; i < e; i++) s += mono[i]*mono[i];
+    db[f] = 20*Math.log10(Math.sqrt(s/hop) + 1e-10);
+  }
+  return {db, hop};
+}
+const pct = (a, p) => { const s = Float32Array.from(a).sort();
+  return s[Math.min(s.length-1, Math.floor(s.length*p))]; };
+function autoThreshold(db){
+  const noise = pct(db,.10), speech = pct(db,.90);
+  if (speech - noise < 12) return -45;
+  return Math.min(-24, Math.max(-70, Math.max(noise+6, speech-30)));
+}
+function analyze(buf, o){
+  const sr = buf.sampleRate, mono = toMono(buf);
+  const {db, hop} = frameDb(mono, sr);
+  const thr = o.auto ? autoThreshold(db) : o.threshold;
+  const n = db.length, total = buf.length;
+  const keepS = Math.round(o.keep*sr), edgeS = Math.round(.05*sr), minS = Math.round(o.minSilence*sr);
+  const removes = [];
+  if (!o.noCut){
+    let i = 0;
+    while (i < n){
+      if (db[i] < thr){
+        let j = i; while (j < n && db[j] < thr) j++;
+        const s = i*hop, e = (j >= n) ? total : j*hop;
+        if (e - s >= minS){
+          const head = i === 0, tail = j >= n;
+          const cs = head ? s : s + (tail ? edgeS : keepS);
+          const ce = tail ? e : e - (head ? edgeS : keepS);
+          if (ce - cs > 0) removes.push([cs, ce]);
+        }
+        i = j;
+      } else i++;
+    }
+  }
+  const keeps = []; let cur = 0;
+  for (const [s,e] of removes){ if (s > cur) keeps.push([cur,s]); cur = e; }
+  if (cur < total) keeps.push([cur,total]);
+  if (!keeps.length) keeps.push([0,total]);
+  return {sr, total, thr, removes, keeps, mono};
+}
+function renderAudio(buf, an){
+  const len = an.keeps.reduce((a,[s,e]) => a+(e-s), 0);
+  const out = ctx.createBuffer(buf.numberOfChannels, len, buf.sampleRate);
+  const f = Math.max(1, Math.round(buf.sampleRate*4/1000));
+  for (let c = 0; c < buf.numberOfChannels; c++){
+    const s0 = buf.getChannelData(c), d0 = out.getChannelData(c);
+    let o = 0;
+    an.keeps.forEach(([s,e], idx) => {
+      const seg = s0.subarray(s,e); d0.set(seg,o);
+      if (seg.length >= 2*f){
+        if (idx > 0) for (let i=0;i<f;i++) d0[o+i] *= i/f;
+        if (idx < an.keeps.length-1) for (let i=0;i<f;i++) d0[o+seg.length-1-i] *= i/f;
+      }
+      o += seg.length;
+    });
+  }
+  return out;
+}
+function makeMap(an){
+  const offs = []; let acc = 0;
+  for (const [s,e] of an.keeps){ offs.push(acc); acc += e-s; }
+  return t => {
+    const x = Math.round(t*an.sr);
+    let lo = 0, hi = an.keeps.length-1, k = 0;
+    while (lo <= hi){ const m = (lo+hi)>>1;
+      if (an.keeps[m][0] <= x){ k = m; lo = m+1; } else hi = m-1; }
+    const [ks,ke] = an.keeps[k];
+    return (x >= ke ? offs[k]+(ke-ks) : offs[k]+(x-ks)) / an.sr;
+  };
+}
+
+/* ============================ SRT ============================ */
+function parseSRT(text){
+  const out = [];
+  for (const b of text.replace(/\r/g,"").trim().split(/\n{2,}/)){
+    const L = b.split("\n").filter(x => x.trim());
+    if (!L.length) continue;
+    const ti = L[0].includes("-->") ? 0 : 1;
+    if (!L[ti] || !L[ti].includes("-->")) continue;
+    const [a,bb] = L[ti].split("-->");
+    const T = s => { const m = s.match(/(\d+):(\d{2}):(\d{2})[,.](\d{1,3})/);
+      return m ? +m[1]*3600 + +m[2]*60 + +m[3] + +m[4].padEnd(3,"0")/1000 : null; };
+    const st = T(a), en = T(bb);
+    if (st === null || en === null) continue;
+    const body = L.slice(ti+1).map(x => x.trim()).join(" ").trim();
+    if (body) out.push({start:st, end:en, text:body});
+  }
+  out.sort((a,b) => a.start - b.start || a.end - b.end);
+  return out;
+}
+function fmtTs(t){
+  const ms = Math.round(Math.max(0,t)*1000), p = (v,n=2) => String(v).padStart(n,"0");
+  return `${p(Math.floor(ms/3600000))}:${p(Math.floor(ms/60000)%60)}:${p(Math.floor(ms/1000)%60)},${p(ms%1000,3)}`;
+}
+const toSRT = cs => cs.map((c,i) => `${i+1}\n${fmtTs(c.start)} --> ${fmtTs(c.end)}\n${c.text}\n`).join("\n");
+
+function balance(words, maxC, hardMax){
+  const n = words.length; if (!n) return [];
+  const pre = [0];
+  for (let k=0;k<n;k++) pre.push(pre[k]+words[k].length);
+  const cost = Array(n+1).fill(Infinity), back = Array(n+1).fill(0);
+  cost[0] = 0;
+  for (let i=1;i<=n;i++) for (let j=i-1;j>=0;j--){
+    const w = pre[i]-pre[j]+(i-j-1);
+    if (w > hardMax && j < i-1) break;
+    const c = w<=maxC ? (maxC-w)**2 : (w<=hardMax ? (3*(w-maxC))**2 : 1e4);
+    if (cost[j]+c < cost[i]){ cost[i] = cost[j]+c; back[i] = j; }
+  }
+  const o = []; let i = n;
+  while (i > 0){ const j = back[i]; o.push(words.slice(j,i).join(" ")); i = j; }
+  return o.reverse();
+}
+function splitText(text, maxC){
+  const hardMax = maxC+4, words = text.trim().split(/\s+/).filter(Boolean);
+  const out = []; let buf = [];
+  for (let w of words){
+    if (w.length > hardMax){
+      out.push(...balance(buf,maxC,hardMax)); buf = [];
+      while (w.length > hardMax){ out.push(w.slice(0,maxC)); w = w.slice(maxC); }
+      if (w) buf.push(w);
+    } else buf.push(w);
+  }
+  out.push(...balance(buf,maxC,hardMax));
+  return out.length ? out : [text.trim()];
+}
+function snapTo(t, db, hop, win, lo, hi){
+  const a = Math.max(lo,t-win), b = Math.min(hi,t+win);
+  if (b <= a) return t;
+  const ia = Math.max(0,Math.floor(a/hop)), ib = Math.min(db.length-1,Math.floor(b/hop));
+  if (ib <= ia) return t;
+  let bi = ia, bv = db[ia];
+  for (let i=ia+1;i<=ib;i++) if (db[i] < bv){ bv = db[i]; bi = i; }
+  return bi*hop;
+}
+function resync(source, map, maxC, newDb, total, fill){
+  const out = [], hop = HOP_MS/1000;
+  for (const c of source){
+    const ns = map(c.start), ne = map(c.end);
+    if (ne-ns < .05) continue;
+    const chunks = splitText(c.text, maxC), n = chunks.length;
+    const ws = chunks.map(s => Math.max(1, s.replace(/\s+/g,"").length));
+    const tot = ws.reduce((a,b)=>a+b,0), span = ne-ns;
+    let bd = [ns]; let acc = 0;
+    for (let i=0;i<n-1;i++){ acc += ws[i]; bd.push(ns+span*acc/tot); }
+    bd.push(ne);
+    if (newDb) {
+      for (let i=1;i<n;i++){
+        const lo = bd[i-1]+.12, hi = bd[i+1]-.12;
+        if (hi > lo) bd[i] = snapTo(bd[i], newDb, hop, .20, lo, hi);
+      }
+      bd.sort((a,b)=>a-b);
+    }
+    if (span >= n*MINCUE){
+      for (let i=1;i<=n;i++) if (bd[i]-bd[i-1] < MINCUE) bd[i] = bd[i-1]+MINCUE;
+      if (bd[n] > ne){ bd[n] = ne;
+        for (let i=n-1;i>0;i--) bd[i] = Math.min(bd[i], bd[i+1]-MINCUE); }
+    } else bd = Array.from({length:n+1}, (_,i) => ns+span*i/n);
+    chunks.forEach((t,i) => out.push({start:bd[i], end:bd[i+1], text:t}));
+  }
+  if (!out.length) return out;
+  if (fill) applyFill(out, total);
+  else {
+    for (let i=0;i<out.length-1;i++)
+      if (out[i].end > out[i+1].start) out[i].end = out[i+1].start;
+    const L = out[out.length-1]; L.end = Math.min(Math.max(L.end, L.start+.2), total);
+  }
+  return out;
+}
+function applyFill(cs, total){
+  if (!cs.length) return;
+  for (let i=0;i<cs.length-1;i++) cs[i].end = cs[i+1].start;
+  if (cs[0].start <= EDGE_SNAP) cs[0].start = 0;
+  if (total - cs[cs.length-1].end <= EDGE_SNAP) cs[cs.length-1].end = total;
+}
+
+/* ---- 대본 표기 정리 + 자막 구간을 실제 발화에 맞추기 ----
+   타입캐스트 SRT 는 문장 앞뒤 무음까지 자막 구간에 포함한다(앞 ~180ms, 뒤 ~280ms).
+   그대로 글자 수 비례 배분을 하면 늘어난 자를 쓰는 셈이라 문장 뒤로 갈수록 밀린다. */
+function cleanText(s){
+  s = s.replace(/([가-힣])\s*-\s*(?=[가-힣])/g, "$1 ");   // 찍히고-밤에는 → 찍히고 밤에는
+  s = s.replace(/([가-힣])\s*-\s*(?=\s|$)/g, "$1 ");      // 그랬는데요- → 그랬는데요
+  s = s.replace(/([가-힣])(?=\d)/g, "$1 ");                // 먹고160 → 먹고 160
+  return s.replace(/\s{2,}/g, " ").trim();                // 숫자 뒤 조사(150까지)는 그대로
+}
+function tightenCues(cs, db, thr){
+  const hop = HOP_MS/1000, n = db.length;
+  let fixed = 0, saved = 0;
+  for (const c of cs){
+    const i = Math.max(0, Math.min(n-1, Math.floor(c.start/hop)));
+    const j = Math.max(0, Math.min(n-1, Math.floor(c.end/hop)));
+    let k = i; while (k <= j && db[k] < thr) k++;
+    if (k > j) continue;                      // 소리가 없는 자막은 건드리지 않는다
+    let m = j; while (m >= k && db[m] < thr) m--;
+    const ns = k*hop, ne = (m+1)*hop;
+    if (ns > c.start + 0.02 || ne < c.end - 0.02){ fixed++; saved += (ns-c.start)+(c.end-ne); }
+    c.start = ns; c.end = Math.max(ne, ns + 0.05);
+  }
+  return {fixed, saved};
+}
+
+/* ============================ 재계산 ============================ */
+function rebuild(){
+  if (!audioBuf) return;
+  analysis = analyze(audioBuf, {
+    auto: $("autoThr").checked, threshold: +$("thr").value,
+    minSilence: +$("minSil").value, keep: +$("keep").value, noCut: $("noCut").checked });
+  newBuf = renderAudio(audioBuf, analysis);
+  onsetCache = null;
+
+  const o = audioBuf.duration, nn = newBuf.duration;
+  $("sOrig").textContent  = fmtDur(o);
+  $("sNew").textContent   = fmtDur(nn);
+  $("sSaved").textContent = `−${fmtDur(o-nn)} (${o ? ((o-nn)/o*100).toFixed(1) : 0}%)`;
+  $("sCuts").textContent  = `${analysis.removes.length}곳`;
+  $("setInfo").textContent = "현재 설정 — " + settingsLine();
+
+  if (srtCues && !hasTimes){
+    // 대본 텍스트는 시각이 없다. 엔진이 음성 인식으로 채워야 한다.
+    cues = [];
+    $("tightInfo").textContent = engine
+      ? "대본 텍스트입니다 — 엔진이 음성 인식으로 시각을 채웁니다."
+      : "대본 텍스트는 엔진이 필요합니다. '무음제거 열기.bat' 으로 실행하세요.";
+  } else if (srtCues){
+    // 원본 오디오 기준으로 자막 구간을 실제 발화에 맞춰 좁힌다
+    const src = srtCues.map(c => ({start:c.start, end:c.end, text: cleanText(c.text)}));
+    const srcDb = frameDb(analysis.mono, analysis.sr).db;
+    const asIs = $("asIs").checked;
+    const tg = asIs ? {fixed:0, saved:0} : tightenCues(src, srcDb, analysis.thr);
+    $("tightInfo").textContent = tg.fixed
+      ? `자막 ${tg.fixed}개를 실제 발화에 맞춰 좁힘 (무음 ${tg.saved.toFixed(2)}초 제외)` : "";
+    if (asIs){
+      // 완성된 SRT 를 검토하는 모드: 다시 나누지 않고 시간축만 옮긴다
+      const map = makeMap(analysis);
+      cues = src.map(c => ({start: map(c.start), end: map(c.end), text: c.text}))
+                .filter(c => c.end > c.start + 0.02);
+    } else {
+      const {db} = frameDb(toMono(newBuf), newBuf.sampleRate);
+      cues = resync(src, makeMap(analysis), +$("chars").value, db, nn, $("fill").checked);
+    }
+  } else { cues = []; $("tightInfo").textContent = ""; }
+  edited = false; sel = cues.length ? 0 : -1;
+  hist.length = 0; future.length = 0; updHistBtns();
+  endOffsetSession();
+  refreshAll();
+}
+const fmtDur = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${(s%60).toFixed(2).padStart(5,"0")}`;
+
+function refreshAll(){
+  $("sCues").textContent = `${cues.length}개`;
+  $("srtInfo").textContent = cues.length
+    ? `자막 ${cues.length}개 · 최대 ${$("chars").value}자` + (edited ? " · 직접 수정됨" : "")
+    : "SRT 파일을 넣으면 잘라낸 시간에 맞춰 자막을 만들고 여기서 편집할 수 있습니다.";
+  $("dlSrt").disabled = !cues.length;
+  layout(); drawWave(); drawCues(); showSel();
+}
+
+/* ============================ 타임라인 ============================ */
+function totalDur(){ return newBuf ? newBuf.duration : 0; }
+function maxPps(){ const d = totalDur(); return d ? Math.min(400, 30000/d) : 400; }
+function layout(){
+  pps = Math.min(+$("zoom").value, maxPps());
+  const w = Math.max(600, Math.ceil(totalDur()*pps));
+  $("inner").style.width = w+"px";
+  $("cv").width = w; $("cv").style.width = w+"px";
+  $("cv").height = 132;
+  $("track").style.width = w+"px";
+}
+function drawWave(){
+  if (!analysis) return;
+  const cv = $("cv"), g = cv.getContext("2d"), W = cv.width, H = cv.height;
+  g.fillStyle = "#0f1114"; g.fillRect(0,0,W,H);
+  // 편집 후 파형을 그린다 (타임라인 기준이 편집 후이므로)
+  const mono = toMono(newBuf), n = mono.length, step = n/W;
+  g.fillStyle = "#3d8fe0";
+  for (let x=0;x<W;x++){
+    let mx = 0;
+    for (let i=Math.floor(x*step), e=Math.min(n,i+step); i<e; i+=2){
+      const v = Math.abs(mono[i]); if (v > mx) mx = v;
+    }
+    const h = Math.max(1, mx*H*.9);
+    g.fillRect(x,(H-h)/2,1,h);
+  }
+  // 잘라낸 지점 표시
+  if (analysis.removes.length){
+    const map = makeMap(analysis);
+    g.fillStyle = "rgba(255,84,112,.85)";
+    for (const [s] of analysis.removes){
+      const x = map(s/analysis.sr)*pps;
+      g.fillRect(x-1,0,2,H);
+    }
+  }
+}
+/* 겹치는 자막은 아래 줄로 내려 보낸다 (캡컷과 같은 방식) */
+function assignLanes(cs){
+  const laneEnd = [], lane = [];
+  cs.forEach((c,i) => {
+    let L = 0;
+    while (L < laneEnd.length && c.start < laneEnd[L] - 1e-4) L++;
+    laneEnd[L] = Math.max(laneEnd[L] || 0, c.end);
+    lane[i] = L;
+  });
+  return {lane, n: Math.max(1, laneEnd.length)};
+}
+function overlapCount(){
+  let k = 0;
+  for (let i=0;i<cues.length-1;i++)
+    if (cues[i].end > cues[i+1].start + 1e-4) k++;
+  return k;
+}
+function applyHeights(){
+  const trackH = laneCount*(ROW_H+ROW_GAP) + (refCues ? ROW_H + 10 : 0);
+  const h = WAVE_H + 8 + trackH;
+  $("inner").style.height = h+"px";
+  $("track").style.top = (WAVE_H+8)+"px";
+  $("track").style.height = trackH+"px";
+  $("head").style.height = h+"px";
+}
+function drawCues(){
+  const tr = $("track");
+  tr.innerHTML = "";
+  const {lane, n} = assignLanes(cues);
+  laneCount = n;
+  applyHeights();
+  cues.forEach((c,i) => {
+    const el = document.createElement("div");
+    const bad = (i < cues.length-1 && c.end > cues[i+1].start + 1e-4) ||
+                (i > 0 && cues[i-1].end > c.start + 1e-4);
+    el.className = "cue" + (i === sel ? " sel" : "") + (bad ? " ov" : "");
+    el.style.left = (c.start*pps)+"px";
+    el.style.width = Math.max(3,(c.end-c.start)*pps)+"px";
+    el.style.top = (lane[i]*(ROW_H+ROW_GAP))+"px";
+    el.style.height = ROW_H+"px";
+    el.textContent = c.text;
+    el.title = `${c.text}\n${fmtDur(c.start)} → ${fmtDur(c.end)}`;
+    el.dataset.i = i;
+    el.innerHTML += '<div class="h l"></div><div class="h r"></div>';
+    tr.appendChild(el);
+  });
+  if (refCues){
+    const top = laneCount*(ROW_H+ROW_GAP) + 6;
+    refCues.forEach((c, i) => {
+      const el = document.createElement("div");
+      el.className = "cue ref";
+      el.style.left = (c.start*pps)+"px";
+      el.style.width = Math.max(3,(c.end-c.start)*pps)+"px";
+      el.style.top = top+"px";
+      el.style.height = ROW_H+"px";
+      el.textContent = c.text;
+      el.title = `[비교] ${c.text}
+${fmtDur(c.start)} → ${fmtDur(c.end)}`;
+      el.onmousedown = ev => { ev.stopPropagation(); play(c.start, c.end); };
+      tr.appendChild(el);
+    });
+  }
+  $("head").style.left = (curTime()*pps)+"px";
+  const ov = overlapCount();
+  $("ovInfo").textContent = ov
+    ? `⚠ 겹치는 자막 ${ov}쌍 — 아래 줄에 따로 표시했습니다. 캡컷에서도 자막 트랙이 나뉩니다.`
+    : "";
+}
+
+/* ---- 드래그 편집 (이웃 영역을 절대 침범하지 않는다) ---- */
+let drag = null;
+const MINLEN = 0.08;
+$("track").addEventListener("mousedown", e => {
+  const el = e.target.closest(".cue"); if (!el) return;
+  const i = +el.dataset.i;
+  // 편집칸에 포커스가 남아 있으면 Del·S·M 같은 단축키를 편집칸이 가로챈다.
+  // 블록을 만지는 순간 포커스를 타임라인으로 옮긴다.
+  $("track").focus({preventScroll:true});
+  select(i);
+  pushHist();
+  const mode = e.target.classList.contains("l") ? "l"
+             : e.target.classList.contains("r") ? "r" : "move";
+  const c = cues[i], p = cues[i-1], n = cues[i+1];
+  // 시작 시점의 값을 통째로 기억해 두고, 이동할 때마다 '원본'에서 다시 계산한다.
+  // (현재 값으로 판정하면 첫 이동 뒤 이웃이 바뀌어 붙음 여부를 잘못 읽는다)
+  drag = {
+    i, mode, x0: e.clientX, s0: c.start, e0: c.end,
+    pS: p ? p.start : null, pE: p ? p.end : null,
+    nS: n ? n.start : null, nE: n ? n.end : null,
+    joinL: !!p && Math.abs(p.end - c.start) < .004,
+    joinR: !!n && Math.abs(n.start - c.end) < .004,
+  };
+  e.preventDefault();
+});
+window.addEventListener("mousemove", e => {
+  if (!drag) return;
+  const d = drag, dt = (e.clientX - d.x0)/pps, T = totalDur();
+  const c = cues[d.i], p = cues[d.i-1], n = cues[d.i+1];
+  // 붙어 있던 이웃은 같이 밀리고(줄이고), 떨어져 있던 이웃은 경계가 벽이 된다
+  const lo = d.pE === null ? 0        : (d.joinL ? d.pS + MINLEN : d.pE);
+  const hi = d.nS === null ? T        : (d.joinR ? d.nE - MINLEN : d.nS);
+
+  if (d.mode === "move"){
+    const len = d.e0 - d.s0;
+    const s = Math.min(Math.max(d.s0 + dt, lo), Math.max(lo, hi - len));
+    c.start = s; c.end = s + len;
+  } else if (d.mode === "l"){
+    c.start = Math.min(Math.max(d.s0 + dt, lo), d.e0 - MINLEN);
+    c.end = d.e0;
+  } else {
+    c.end = Math.max(Math.min(d.e0 + dt, hi), d.s0 + MINLEN);
+    c.start = d.s0;
+  }
+  if (p){ p.start = d.pS; p.end = d.joinL ? c.start : d.pE; }
+  if (n){ n.end = d.nE;   n.start = d.joinR ? c.end : d.nS; }
+  edited = true;
+  drawCues(); showSel();
+});
+window.addEventListener("mouseup", () => { if (drag){ drag = null; endOffsetSession(); refreshInfo(); } });
+
+/* ---- 되돌리기 / 다시 실행 ---- */
+function snapshot(){ return JSON.stringify(cues); }
+function pushHist(){
+  hist.push(snapshot());
+  if (hist.length > 200) hist.shift();
+  future.length = 0;
+  updHistBtns();
+}
+function updHistBtns(){
+  $("undo").disabled = !hist.length;
+  $("redoBtn").disabled = !future.length;
+}
+function applySnap(s){
+  cues = JSON.parse(s);
+  endOffsetSession();
+  sel = Math.min(sel, cues.length-1);
+  edited = true;
+  drawCues(); showSel(); refreshInfo(); updHistBtns();
+}
+function undo(){ if (!hist.length) return; future.push(snapshot()); applySnap(hist.pop()); }
+function redo(){ if (!future.length) return; hist.push(snapshot()); applySnap(future.pop()); }
+$("undo").onclick = undo;
+$("redoBtn").onclick = redo;
+
+/* ---- 파형 클릭으로 이동 ---- */
+$("cv").addEventListener("mousedown", e => {
+  $("track").focus({preventScroll:true});
+  const r = $("inner").getBoundingClientRect();
+  seek(Math.max(0, Math.min(totalDur(), (e.clientX - r.left)/pps)));
+});
+
+/* ============================ 선택/편집 ============================ */
+function select(i){
+  sel = Math.max(-1, Math.min(cues.length-1, i));
+  drawCues(); showSel();
+}
+function showSel(){
+  const c = cues[sel];
+  const on = !!c;
+  ["bSplit","bMerge","bDel","bPlayCue"].forEach(id => $(id).disabled = !on);
+  $("bMerge").disabled = !on || sel >= cues.length-1;
+  if (!on){ $("cueText").value = ""; $("cs").textContent = $("ce").textContent =
+            $("cd").textContent = $("cl").textContent = "–"; return; }
+  if (document.activeElement !== $("cueText")) $("cueText").value = c.text;
+  $("cs").textContent = fmtDur(c.start);
+  $("ce").textContent = fmtDur(c.end);
+  $("cd").textContent = (c.end-c.start).toFixed(2)+"s";
+  $("cl").textContent = c.text.length+"자";
+  // 참고용: 자막 시작이 '소리가 올라오는 지점' 보다 얼마나 앞/뒤인지.
+  // 소리 시작점은 자음이 서서히 커지는 구간 탓에 실제 발화보다 조금 늦게 잡힌다.
+  try {
+    const o = nearestOnset(detectOnsets(), c.start);
+    const d = (c.start - o) * 1000;
+    $("conset").textContent = Math.abs(d) > 400 ? "–"
+      : (d > 0 ? "+" : "") + d.toFixed(0) + " ms";
+  } catch(e){ $("conset").textContent = "–"; }
+}
+function refreshInfo(){
+  $("sCues").textContent = `${cues.length}개`;
+  $("srtInfo").textContent = `자막 ${cues.length}개 · 최대 ${$("chars").value}자` + (edited ? " · 직접 수정됨" : "");
+}
+$("cueText").addEventListener("focus", () => { if (cues[sel]) pushHist(); });
+$("cueText").addEventListener("input", () => {
+  if (!cues[sel]) return;
+  cues[sel].text = $("cueText").value.replace(/\s*\n\s*/g," ").trim();
+  edited = true;
+  $("cl").textContent = cues[sel].text.length+"자";
+  drawCues();
+});
+$("cueText").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); $("cueText").blur(); }
+});
+
+$("bSplit").onclick = () => {
+  endOffsetSession();
+  const c = cues[sel]; if (!c) return;
+  const t = curTime();
+  if (t <= c.start+.1 || t >= c.end-.1){ alert("재생헤드를 자막 안쪽에 두세요."); return; }
+  pushHist();
+  // 글자도 시간 비율에 맞춰 나눈다
+  const words = c.text.split(/\s+/).filter(Boolean);
+  const f = (t-c.start)/(c.end-c.start);
+  const k = Math.max(1, Math.min(words.length-1, Math.round(words.length*f)));
+  const a = words.slice(0,k).join(" "), b = words.slice(k).join(" ") || "…";
+  cues.splice(sel, 1, {start:c.start, end:t, text:a}, {start:t, end:c.end, text:b || "…"});
+  edited = true; select(sel); refreshInfo(); drawCues(); showSel();
+};
+$("bMerge").onclick = () => {
+  endOffsetSession();
+  const c = cues[sel], n = cues[sel+1]; if (!c || !n) return;
+  pushHist();
+  c.text = (c.text+" "+n.text).trim(); c.end = n.end;
+  cues.splice(sel+1,1);
+  edited = true; drawCues(); showSel(); refreshInfo();
+};
+$("bDel").onclick = () => {
+  endOffsetSession();
+  if (!cues[sel]) return;
+  pushHist();
+  const prev = cues[sel-1], c = cues[sel], next = cues[sel+1];
+  if (prev && next && Math.abs(prev.end-c.start) < .003) prev.end = c.end;
+  cues.splice(sel,1);
+  edited = true; select(Math.min(sel, cues.length-1)); refreshInfo();
+};
+$("bPlayCue").onclick = () => { const c = cues[sel]; if (c) play(c.start, c.end); };
+
+/* ============================ 재생 ============================ */
+function curTime(){
+  if (!ctx || !newBuf) return 0;
+  return playing ? Math.min(totalDur(), ctx.currentTime - playT0 + playOff) : playOff;
+}
+function play(from = null, until = null){
+  if (!newBuf) return;
+  stopAudio();
+  playOff = from !== null ? from : Math.min(playOff, totalDur()-.01);
+  stopAt = until;
+  src = ctx.createBufferSource();
+  src.buffer = newBuf; src.connect(ctx.destination);
+  playT0 = ctx.currentTime;
+  src.start(0, Math.max(0, playOff));
+  playing = true; $("play").textContent = "❚❚ 일시정지";
+  tick();
+}
+function stopAudio(){
+  if (src){ try{ src.onended = null; src.stop(); }catch(e){} src = null; }
+  if (playing) playOff = curTime();
+  playing = false; stopAt = null;
+  $("play").textContent = "▶ 재생";
+  cancelAnimationFrame(rafId);
+  drawCues(); updClock();
+}
+function seek(t){
+  const was = playing;
+  stopAudio(); playOff = Math.max(0, Math.min(totalDur(), t));
+  drawCues(); updClock();
+  if (was) play(playOff);
+}
+function tick(){
+  const t = curTime();
+  const shown = Math.max(0, t - (+$("monLat").value)/1000);   // 원격 지연 보정 (화면만)
+  $("head").style.left = (shown*pps)+"px";
+  updClock();
+  const c = cueAt(shown);
+  if (c >= 0 && c !== sel) select(c);
+  if ($("follow").checked){
+    const sc = $("scroller"), x = shown*pps;
+    if (x < sc.scrollLeft+60 || x > sc.scrollLeft+sc.clientWidth-60)
+      sc.scrollLeft = x - sc.clientWidth*0.4;
+  }
+  if ((stopAt !== null && t >= stopAt) || t >= totalDur()-0.005){ stopAudio(); return; }
+  rafId = requestAnimationFrame(tick);
+}
+function cueAt(t){ return cues.findIndex(c => t >= c.start && t < c.end); }
+function updClock(){ $("clock").textContent = `${fmtDur(curTime())} / ${fmtDur(totalDur())}`; }
+
+$("play").onclick = () => playing ? stopAudio() : play();
+$("stop").onclick = () => { stopAudio(); seek(0); };
+
+document.addEventListener("keydown", e => {
+  const k0 = e.key.toLowerCase();
+  if (e.ctrlKey || e.metaKey){                 // 편집칸 안에서도 동작
+    if (k0 === "z" && !e.shiftKey){ e.preventDefault(); undo(); return; }
+    if ((k0 === "z" && e.shiftKey) || k0 === "y"){ e.preventDefault(); redo(); return; }
+  }
+  if (/INPUT|TEXTAREA/.test(e.target.tagName)) return;
+  const k = k0;
+  if (e.code === "Space"){ e.preventDefault(); playing ? stopAudio() : play(); }
+  else if (k === "s"){ e.preventDefault(); $("bSplit").click(); }
+  else if (k === "m"){ e.preventDefault(); $("bMerge").click(); }
+  else if (e.key === "Delete" || e.key === "Backspace"){ e.preventDefault(); $("bDel").click(); }
+  else if (k === "\\"){ e.preventDefault(); snapSelectedToSpeech(); }
+  else if (k === "[" || k === "]"){
+    e.preventDefault();
+    const c = cues[sel]; if (!c) return;
+    pushHist(); endOffsetSession();
+    const d = (k === "[" ? -0.01 : 0.01);
+    const p = cues[sel-1], n = cues[sel+1];
+    const joinL = p && Math.abs(p.end - c.start) < .004;
+    const joinR = n && Math.abs(n.start - c.end) < .004;
+    const lo = p ? p.start + 0.08 : 0, hi = n ? n.end - 0.08 : totalDur();
+    const len = c.end - c.start;
+    const s = Math.min(Math.max(c.start + d, lo), hi - len);
+    c.start = s; c.end = s + len;
+    if (joinL) p.end = c.start;
+    if (joinR) n.start = c.end;
+    edited = true; drawCues(); showSel();
+  }
+  else if (e.key === "ArrowLeft" || e.key === "ArrowRight"){
+    e.preventDefault();
+    const d = e.key === "ArrowLeft" ? -1 : 1;
+    const i = sel + d;
+    if (i < 0 || i >= cues.length) return;
+    select(i);
+    // 그 자막 구간만 들려준다. 들리는 말이 자막 내용과 같으면 싱크가 맞는 것 —
+    // 재생 바를 눈으로 좇을 필요가 없어 원격 접속에서도 확실하다.
+    if ($("autoPlayCue").checked) play(cues[i].start, cues[i].end);
+    else seek(cues[i].start);
+  }
+});
+
+/* ============================ 내보내기 ============================ */
+function encodeWAV(buf){
+  const ch = buf.numberOfChannels, n = buf.length, sr = buf.sampleRate;
+  const ab = new ArrayBuffer(44+n*ch*2), v = new DataView(ab);
+  const S = (o,s) => { for (let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); };
+  S(0,"RIFF"); v.setUint32(4,36+n*ch*2,true); S(8,"WAVE"); S(12,"fmt ");
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,ch,true);
+  v.setUint32(24,sr,true); v.setUint32(28,sr*ch*2,true); v.setUint16(32,ch*2,true);
+  v.setUint16(34,16,true); S(36,"data"); v.setUint32(40,n*ch*2,true);
+  const cs = []; for (let c=0;c<ch;c++) cs.push(buf.getChannelData(c));
+  let o = 44;
+  for (let i=0;i<n;i++) for (let c=0;c<ch;c++){
+    const s = Math.max(-1, Math.min(1, cs[c][i]));
+    v.setInt16(o, s<0 ? s*0x8000 : s*0x7FFF, true); o += 2;
+  }
+  return new Blob([ab], {type:"audio/wav"});
+}
+function download(blob, name){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+const stem = () => (audioName.replace(/\.[^.]+$/,"") || "audio") + "_clean";
+$("dlAudio").onclick = () => download(encodeWAV(newBuf), stem()+".wav");
+$("dlSrt").onclick   = () => download(
+  new Blob(["﻿"+toSRT(cues)], {type:"text/plain;charset=utf-8"}), stem()+".srt");
+
+/* ============================ 컨트롤 ============================ */
+function guard(){
+  if (!edited) return true;
+  return confirm("직접 고친 자막이 있습니다. 다시 만들면 수정 내용이 사라집니다. 계속할까요?");
+}
+function bindSlider(id, label, fmt, recalc){
+  const el = $(id);
+  el.oninput = () => {
+    if ($(label)) $(label).textContent = fmt(+el.value);
+    syncNums();
+    if (!audioBuf) return;
+    if (recalc){ if (!guard()){ return; } rebuild(); }
+    else { layout(); drawWave(); drawCues(); }
+  };
+  if ($(label)) $(label).textContent = fmt(+el.value);
+  syncNums();
+}
+bindSlider("minSil","vMin", v => v.toFixed(2)+" s", true);
+bindSlider("keep","vKeep",  v => v.toFixed(2)+" s", true);
+bindSlider("chars","vChars",v => v+" 자", true);
+$("zoom").oninput = () => { if (audioBuf){ layout(); drawWave(); drawCues(); } };
+$("thr").oninput = () => {
+  $("autoThr").checked = false;
+  syncNums();
+  if (audioBuf && guard()) rebuild();
+};
+$("autoThr").onchange = () => {
+  $("nthr").disabled = $("autoThr").checked;
+  if (audioBuf && guard()) rebuild();
+};
+$("fill").onchange  = () => { if (audioBuf && guard()) rebuild(); };
+$("noCut").onchange = () => { if (audioBuf && guard()) rebuild(); };
+$("asIs").onchange  = () => { if (audioBuf && guard()) rebuild(); };
+$("asrMode").onchange = () => { if (engine && srtText.trim() && guard()) runEngine(); };
+$("redo").onclick   = () => { if (audioBuf && guard()) rebuild(); };
+
+/* ============ 말 시작점 감지 · 싱크 진단 (소리를 안 들어도 됨) ============ */
+let onsetCache = null;
+
+function detectOnsets(){
+  if (onsetCache && onsetCache.key === newBuf.length) return onsetCache.list;
+  const {db} = frameDb(toMono(newBuf), newBuf.sampleRate);
+  const T = analysis.thr + 8;            // 무음 판정선보다 조금 위 = '말이 시작됐다'
+  const hopSec = HOP_MS / 1000;
+  const list = [];
+  let quiet = 99;
+  for (let i = 0; i < db.length; i++){
+    if (db[i] < T) quiet++;
+    else { if (quiet >= 2) list.push(i * hopSec); quiet = 0; }
+  }
+  onsetCache = {key: newBuf.length, list};
+  return list;
+}
+function nearestOnset(list, t){
+  if (!list.length) return null;
+  let lo = 0, hi = list.length - 1;
+  while (lo < hi){ const m = (lo + hi) >> 1; if (list[m] < t) lo = m + 1; else hi = m; }
+  const a = list[lo], b = list[Math.max(0, lo - 1)];
+  return Math.abs(a - t) <= Math.abs(b - t) ? a : b;
+}
+
+/* 치우침 추정: '자막을 d 만큼 밀었을 때 말 시작점과 얼마나 잘 맞는가' 를
+   -400~+400ms 전 구간에서 훑어 최적값을 찾는다.
+   (가장 가까운 시작점만 보면, 크게 밀렸을 때 옆 시작점에 붙어 치우침을 놓친다) */
+function alignCost(list, shiftSec){
+  let sum = 0;
+  for (const c of cues){
+    const x = c.start + shiftSec;
+    const o = nearestOnset(list, x);
+    sum += Math.min(0.25, Math.abs(x - o));      // 상한을 둬 이상치 영향 억제
+  }
+  return sum / cues.length;
+}
+function estimateBias(){
+  const list = detectOnsets();
+  if (!list.length || !cues.length) return null;
+  let best = 0, bestCost = Infinity;
+  for (let ms = -400; ms <= 400; ms += 5){
+    const c = alignCost(list, ms / 1000);
+    if (c < bestCost){ bestCost = c; best = ms; }
+  }
+  return {ms: best, cost: bestCost, zero: alignCost(list, 0)};
+}
+function residual(list, shiftSec){
+  const ds = [];
+  for (const c of cues){
+    const x = c.start + shiftSec;
+    const o = nearestOnset(list, x);
+    if (Math.abs(x - o) < 0.25) ds.push(Math.abs(x - o) * 1000);
+  }
+  ds.sort((a, b) => a - b);
+  return {n: ds.length, med: ds.length ? ds[ds.length >> 1] : 0,
+          bad: ds.filter(v => v > 150).length};
+}
+
+
+
+/* 선택한 자막 하나만 '다음에 소리가 올라오는 지점' 에 정확히 붙인다.
+   전체 자동 정렬은 검증에서 오히려 나빠져 뺐고, 사람이 고른 것만 옮기는 방식으로 남긴다. */
+function snapSelectedToSpeech(){
+  const c = cues[sel]; if (!c || !newBuf) return;
+  const list = detectOnsets();
+  if (!list.length) return;
+  // 지금 위치보다 조금 앞에서부터 찾는다 (이미 살짝 늦은 경우도 당겨올 수 있게)
+  const from = c.start - 0.08;
+  let i = 0; while (i < list.length && list[i] < from) i++;
+  if (i >= list.length) return;
+  const target = list[i];
+  const p = cues[sel-1], n = cues[sel+1];
+  const lo = p ? p.start + 0.12 : 0;
+  const hi = (n ? n.start : totalDur()) - 0.12;
+  if (target < lo || target > hi) return msgDiag("옆 자막에 막혀 옮길 수 없습니다.");
+  pushHist(); endOffsetSession();
+  const joinL = p && Math.abs(p.end - c.start) < .004;
+  const moved = (target - c.start) * 1000;
+  c.start = target;
+  if (c.end < c.start + 0.15) c.end = Math.min(hi + 0.12, c.start + 0.15);
+  if (joinL) p.end = target;
+  edited = true; drawCues(); showSel(); refreshInfo();
+  msgDiag(`${moved > 0 ? "+" : ""}${moved.toFixed(0)}ms 이동해 말 시작에 붙였습니다.`);
+}
+$("bSnapOne").onclick = snapSelectedToSpeech;
+
+/* ---- 비교용 자막: 다른 SRT 를 아래 줄에 얹어 같은 오디오로 A/B 비교 ---- */
+let refCues = null, refName = "";
+$("pickRef").onclick = () => $("refPicker").click();
+$("refPicker").onchange = async () => {
+  const f = $("refPicker").files[0]; if (!f) return;
+  refCues = parseSRT(await readText(f)); refName = f.name;
+  $("clearRef").classList.remove("hidden");
+  msgDiag(`비교 자막 "${refName}" ${refCues.length}개 — 아래 줄(파란색). 클릭하면 그 구간이 재생됩니다.`);
+  drawCues();
+};
+$("clearRef").onclick = () => {
+  refCues = null; $("clearRef").classList.add("hidden");
+  msgDiag(""); drawCues();
+};
+
+const msgDiag = s => { $("diagMsg").textContent = s; };
+
+$("showOnset").onchange = () => drawWave();
+$("monLat").oninput = () => {
+  $("vMonLat").textContent = $("monLat").value + " ms";
+  if (!playing) $("head").style.left = (curTime()*pps)+"px";
+};
+
+/* ---- 자막 전체 밀기 (재생하면서 귀로 맞추는 용도) ---- */
+let offBase = null, offLast = 0;
+function snapshotBase(){ offBase = cues.map(c => ({start:c.start, end:c.end})); }
+function applyOffset(ms){
+  if (!offBase || !cues.length) return;
+  const d = ms/1000, T = totalDur();
+  cues.forEach((c, i) => {
+    const b = offBase[i]; if (!b) return;
+    c.start = Math.max(0, Math.min(T - 0.05, b.start + d));
+    c.end   = Math.max(c.start + 0.05, Math.min(T, b.end + d));
+  });
+  edited = true;
+  drawCues(); showSel(); refreshInfo();
+}
+/* 기준점은 '오프셋 0 상태' 를 한 번만 잡아두고, 슬라이더 값은 항상 그 기준 대비 절대값이다.
+   다른 편집(드래그·나누기·보정 등)이 일어나면 지금 상태가 새 0 이 된다. */
+function beginOffset(){
+  if (offBase) return;
+  pushHist();
+  snapshotBase();
+}
+function endOffsetSession(){        // 다른 편집이 끼어들면 현재 상태를 새 기준으로
+  offBase = null; offLast = 0;
+  const el = $("offset");
+  if (el){ el.value = 0; $("vOffset").textContent = "0 ms"; }
+}
+$("offset").oninput = () => {
+  beginOffset();
+  offLast = +$("offset").value;
+  $("vOffset").textContent = (offLast > 0 ? "+" : "") + offLast + " ms";
+  applyOffset(offLast);
+};
+$("offReset").onclick = () => {
+  if (offLast === 0) return;
+  beginOffset();
+  $("offset").value = 0; offLast = 0;
+  $("vOffset").textContent = "0 ms";
+  applyOffset(0);
+  endOffsetSession();
+};
+
+/* ============================ 로컬 엔진 연동 ============================ */
+/* app.py 로 실행했을 때만 나타난다. 브라우저 단독 실행이면 조용히 숨는다. */
+let engine = null, lastUpload = null;
+
+async function api(path, body, headers){
+  const r = await fetch(path, {method:"POST", body, headers});
+  const j = await r.json().catch(() => ({error:"응답을 읽지 못했습니다"}));
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+async function detectEngine(){
+  try {
+    const r = await fetch("/api/ping", {cache:"no-store"});
+    if (!r.ok) return;
+    engine = await r.json();
+    $("engineBox").classList.remove("hidden");
+    const bits = [];
+    bits.push(engine.align ? (engine.gpu ? "싱크 보정 준비됨 (GPU)" : "싱크 보정 준비됨 (CPU — 느림)")
+                           : "싱크 보정 불가 (faster-whisper 없음)");
+    bits.push(engine.capcut ? "캡컷 연동 가능" : "캡컷을 찾지 못함");
+    msg(bits.join(" · "));
+    $("bAlign").disabled  = !engine.align;
+    $("bProcess").disabled = false;
+    $("verTag").textContent = "버전 " + (engine.version || "?");
+    $("bCapcut").disabled = !engine.capcut;
+  } catch(e){ /* 브라우저로 그냥 연 경우 */ }
+}
+const msg = s => { $("engineMsg").textContent = s; };
+
+async function uploadCurrentAudio(){
+  if (lastUpload && lastUpload.key === audioName + "|" + newBuf.duration.toFixed(3))
+    return lastUpload.id;
+  const blob = encodeWAV(newBuf);
+  const j = await api("/api/upload", blob,
+                    {"X-Filename": encodeURIComponent(stem()+".wav")});
+  lastUpload = {id: j.id, key: audioName + "|" + newBuf.duration.toFixed(3)};
+  return j.id;
+}
+
+/* ---- 엔진에 전체 처리를 맡긴다 (웹 자체 로직과 갈라지지 않게) ---- */
+async function uploadOriginal(){
+  if (origUploadId) return origUploadId;
+  if (!origFile) throw new Error("원본 오디오가 없습니다");
+  const j = await api("/api/upload", origFile,
+                    {"X-Filename": encodeURIComponent(origFile.name)});
+  origUploadId = j.id;
+  return j.id;
+}
+async function runEngine(){
+  if (!engine) return msg("엔진이 없습니다 (app.py 로 실행하세요).");
+  if (!srtText.trim()) return msg("SRT 파일이 필요합니다.");
+  const btn = $("bProcess"); btn.disabled = true;
+  const t0 = Date.now();
+  msg("엔진이 무음 제거와 자막 분할을 처리하는 중… (60초 영상 기준 20~30초)");
+  try {
+    const id = await uploadOriginal();
+    const j = await api("/api/process", JSON.stringify({
+      id, srt: srtText,
+      auto: $("autoThr").checked, threshold: +$("thr").value,
+      minSilence: +$("minSil").value, keep: +$("keep").value,
+      maxChars: +$("chars").value, keepGaps: !$("fill").checked,
+      mode: $("asrMode").checked ? "asr" : "script",
+      hasTimes,
+    }), {"Content-Type":"application/json"});
+    const info = j.info;
+    // 엔진이 만든 오디오 길이와 화면의 길이가 같아야 자막이 맞는다
+    if (Math.abs(info.duration - newBuf.duration) > 0.05)
+      msg(`[!] 길이가 다릅니다 (엔진 ${info.duration.toFixed(2)}s / 화면 ${newBuf.duration.toFixed(2)}s). 설정을 확인하세요.`);
+    cues = j.cues;
+    hist.length = 0; future.length = 0; updHistBtns();
+    edited = false; sel = cues.length ? 0 : -1;
+    endOffsetSession(); refreshAll();
+    const METHOD = {words:"음성 인식 기반 분할 (대본 유지)", asr:"인식한 그대로",
+                    chars:"글자 수 기준 분할"};
+    msg(`엔진 처리 완료 — ${METHOD[info.method] || info.method}`
+      + (info.words ? ` (단어 ${info.words}개, 일치율 ${Math.round(info.ratio*100)}%)` : "")
+      + ` · 자막 ${info.cues}개 · 무음 ${info.cuts}곳 제거`
+      + ` · ${((Date.now()-t0)/1000).toFixed(1)}초`
+      + `
+설정: ${settingsLine()}`);
+  } catch(e){ msg("실패: " + e.message); }
+  btn.disabled = false;
+}
+$("bProcess").onclick = runEngine;
+
+$("bAlign").onclick = async () => {
+  if (!cues.length) return msg("자막이 없습니다.");
+  const btn = $("bAlign"); btn.disabled = true;
+  const t0 = Date.now();
+  msg("오디오를 인식하는 중… 60초 영상 기준 20~30초 걸립니다.");
+  try {
+    pushHist();
+    const id = await uploadCurrentAudio();
+    const j = await api("/api/align", JSON.stringify({
+      id, total: newBuf.duration,
+      cues: cues.map(c => ({start:c.start, end:c.end, text:c.text}))
+    }), {"Content-Type":"application/json"});
+    if (j.applied){
+      cues = j.cues;
+      if ($("fill").checked) applyFill(cues, newBuf.duration);
+      endOffsetSession();
+      edited = true; drawCues(); showSel(); refreshInfo();
+      msg(`싱크 보정 완료 — 단어 ${j.words}개, 일치율 ${Math.round(j.ratio*100)}%, `
+        + `자막 ${j.corrected}/${cues.length}개 교정 (${((Date.now()-t0)/1000).toFixed(1)}초)`);
+    } else {
+      undo();
+      msg(`보정하지 않았습니다: ${j.reason}`);
+    }
+  } catch(e){ msg("실패: " + e.message); }
+  btn.disabled = false;
+};
+
+$("bCapcut").onclick = async () => {
+  if (!newBuf) return;
+  const name = ($("ccName").value || "").trim() || stem();
+  const btn = $("bCapcut"); btn.disabled = true;
+  msg("캡컷 프로젝트를 만드는 중…");
+  try {
+    const id = await uploadCurrentAudio();
+    const j = await api("/api/capcut", JSON.stringify({
+      id, name, ratio: $("ccRatio").value,
+      cues: cues.map(c => ({start:c.start, end:c.end, text:c.text}))
+    }), {"Content-Type":"application/json"});
+    msg(`'${j.name}' 생성 완료 — 자막 ${j.cues}개 · ${j.ratio}. 캡컷을 열면 목록에 있습니다.`);
+  } catch(e){ msg("실패: " + e.message); }
+  btn.disabled = false;
+};
+
+resetControls();      // 모든 컨트롤 정의가 끝난 뒤 기본값으로
+detectEngine();
+</script>
+</body>
+</html>

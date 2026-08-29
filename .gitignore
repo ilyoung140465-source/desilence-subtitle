@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+_backup/
+*.zip
+web/*.bak
+.claude/
