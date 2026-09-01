@@ -248,6 +248,12 @@ class Handler(BaseHTTPRequestHandler):
                     for part in (parts or [c.text]):
                         mapped.append(ds.Cue(tmap(c.start), tmap(c.end), part.strip()))
                 ratio, rows = aligner.word_times([c.text for c in mapped], words, total)
+                if rows is None and ratio is not None and ratio < 0.30:
+                    heard = "".join(w.text for w in words)[:40]
+                    return self._err(
+                        f"오디오와 자막이 서로 다른 내용 같습니다 (일치율 {ratio:.0%}). "
+                        f"자막은 '{cues[0].text[:20] if cues else ''}…', "
+                        f"소리는 '{heard}…' 입니다. 파일 짝을 확인하세요.")
                 if rows:
                     # 앵커는 기본으로 쓰지 않는다 (실측: 0.877 vs 0.918)
                     if has_times and req.get("anchor"):

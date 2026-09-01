@@ -939,6 +939,21 @@ def process(audio: Path, args) -> None:
                     msg = (f"  ✓ 음성 인식 기반 분할 (단어 {len(words)}개, "
                            f"일치율 {ratio:.0%}, 자막 {len(new_cues)}개")
                     print(msg + (f", 문장 {anchored}개 고정)" if anchored else ")"))
+                elif ratio < 0.30:
+                    # 이 정도면 오디오와 자막이 아예 다른 내용이다.
+                    # 그대로 두면 엉뚱한 자막이 붙은 파일이 조용히 만들어진다.
+                    heard = "".join(w.text for w in words)[:40]
+                    mismatch = (
+                        f"\n  [X] 오디오와 자막이 서로 다른 내용 같습니다 "
+                        f"(일치율 {ratio:.0%})\n"
+                        f"      자막 : {cues[0].text[:40] if cues else ''}\n"
+                        f"      소리 : {heard}\n"
+                        f"      파일 짝이 맞는지 확인하세요. "
+                        f"그래도 진행하려면 --force-mismatch\n")
+                    if not args.force_mismatch:
+                        print(mismatch, file=sys.stderr)
+                        sys.exit("  중단했습니다 (잘못된 자막 파일을 만들지 않기 위해).")
+                    print(mismatch + "  --force-mismatch 로 계속합니다.", file=sys.stderr)
                 else:
                     print(f"  [!] 인식 일치율 {ratio:.0%} — 글자 수 기준으로 나눕니다",
                           file=sys.stderr)
@@ -1042,6 +1057,8 @@ def main() -> None:
     g.add_argument("--compute-type", default="auto", help="auto/float16/int8 등")
     g.add_argument("--split", choices=("words", "chars"), default="words",
                    help="words=인식한 단어의 실제 발화 시각으로 나눔, chars=글자 수로 나눔")
+    g.add_argument("--force-mismatch", action="store_true",
+                   help="오디오와 자막 내용이 달라도 강행")
     g.add_argument("--anchor", action="store_true",
                    help="문장 첫 단어를 파형에서 잡은 발화 시작에 고정 "
                         "(실측상 정확도가 떨어져 기본은 끔)")
