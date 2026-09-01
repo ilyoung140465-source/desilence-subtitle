@@ -61,6 +61,7 @@
        display:flex;align-items:center;white-space:nowrap;text-overflow:ellipsis}
   .cue.sel{background:var(--cueSel);border-color:#fff;color:#241000;z-index:3;font-weight:600}
   .cue.ov{box-shadow:0 0 0 1px var(--head) inset}
+  #track.stale .cue{opacity:.35}
   .cue.ref{background:#2f5d7c;border-color:rgba(0,0,0,.5);cursor:pointer}
   .cue.ref:hover{background:#3a7099}
   .cue .h{position:absolute;top:0;width:8px;height:100%;cursor:ew-resize}
@@ -281,6 +282,7 @@ let analysis = null, newBuf = null, cues = [], sel = -1, edited = false;
 let src = null, playT0 = 0, playOff = 0, playing = false, rafId = 0, stopAt = null;
 let pps = 120;                                   // px per second
 let laneCount = 1, hist = [], future = [];
+let cuesStale = false, engineTimer = null, enginePromise = null;   // 설정이 바뀌어 자막을 다시 만들어야 하는 상태
 
 /* 크롬은 새로고침 때 슬라이더 값을 복원한다. 기본값인 줄 알고 쓰는 사고를 막는다. */
 const DEFAULTS = {thr:-30, minSil:0.10, keep:0.05, chars:10, zoom:120, offset:0, monLat:0};
@@ -347,6 +349,8 @@ async function handle(list){
   if (audioBuf){
     ["ui","tlSec","editSec","out"].forEach(id => $(id).classList.remove("hidden"));
     edited = false; rebuild();
+    // 창이 열리자마자 파일을 넣으면 엔진 감지가 아직 안 끝났을 수 있다. 기다렸다가 판단한다.
+    if (enginePromise) { try { await enginePromise; } catch(e){} }
     if (engine && srtText.trim() && $("autoProcess") && $("autoProcess").checked)
       setTimeout(runEngine, 100);
   }
@@ -578,6 +582,26 @@ function applyFill(cs, total){
   if (total - cs[cs.length-1].end <= EDGE_SNAP) cs[cs.length-1].end = total;
 }
 
+/* ---- 설정이 바뀌면 오디오와 자막을 엔진이 함께 다시 만든다 ----
+   예전에는 오디오만 새로 자르고 자막은 브라우저 쪽 옛 방식으로 계산해
+   둘이 어긋났다. 이제 설정이 바뀌면 자막을 흐리게 표시하고,
+   손을 뗀 뒤 엔진이 한 번만 다시 돈다. */
+function engineReady(){ return !!(engine && srtText.trim() && origFile); }
+
+function settingsChanged(){
+  if (!audioBuf) return;
+  if (!engineReady()){          // 엔진이 없으면 예전처럼 브라우저가 계산
+    rebuild();
+    return;
+  }
+  rebuild({keepCues: true});    // 오디오·파형만 즉시 갱신
+  cuesStale = true;
+  drawCues();
+  msg("설정이 바뀌었습니다 — 자막을 다시 계산합니다…");
+  clearTimeout(engineTimer);
+  engineTimer = setTimeout(runEngine, 700);   // 슬라이더를 놓으면 한 번만
+}
+
 /* ---- 대본 표기 정리 + 자막 구간을 실제 발화에 맞추기 ----
    타입캐스트 SRT 는 문장 앞뒤 무음까지 자막 구간에 포함한다(앞 ~180ms, 뒤 ~280ms).
    그대로 글자 수 비례 배분을 하면 늘어난 자를 쓰는 셈이라 문장 뒤로 갈수록 밀린다. */
@@ -604,8 +628,9 @@ function tightenCues(cs, db, thr){
 }
 
 /* ============================ 재계산 ============================ */
-function rebuild(){
+function rebuild(opts){
   if (!audioBuf) return;
+  const keepCues = !!(opts && opts.keepCues);   // 엔진이 다시 만들 예정이면 건드리지 않는다
   analysis = analyze(audioBuf, {
     auto: $("autoThr").checked, threshold: +$("thr").value,
     minSilence: +$("minSil").value, keep: +$("keep").value, noCut: $("noCut").checked });
@@ -619,6 +644,11 @@ function rebuild(){
   $("sCuts").textContent  = `${analysis.removes.length}곳`;
   $("setInfo").textContent = "현재 설정 — " + settingsLine();
 
+  if (keepCues){
+    // 오디오만 새로 자르고, 자막은 엔진이 곧 다시 만든다
+    refreshAll();
+    return;
+  }
   if (srtCues && !hasTimes){
     // 대본 텍스트는 시각이 없다. 엔진이 음성 인식으로 채워야 한다.
     cues = [];
@@ -726,6 +756,7 @@ function drawCues(){
   const {lane, n} = assignLanes(cues);
   laneCount = n;
   applyHeights();
+  tr.classList.toggle("stale", cuesStale);
   cues.forEach((c,i) => {
     const el = document.createElement("div");
     const bad = (i < cues.length-1 && c.end > cues[i+1].start + 1e-4) ||
@@ -1054,7 +1085,7 @@ function bindSlider(id, label, fmt, recalc){
     if ($(label)) $(label).textContent = fmt(+el.value);
     syncNums();
     if (!audioBuf) return;
-    if (recalc){ if (!guard()){ return; } rebuild(); }
+    if (recalc){ if (!guard()){ return; } settingsChanged(); }
     else { layout(); drawWave(); drawCues(); }
   };
   if ($(label)) $(label).textContent = fmt(+el.value);
@@ -1067,17 +1098,17 @@ $("zoom").oninput = () => { if (audioBuf){ layout(); drawWave(); drawCues(); } }
 $("thr").oninput = () => {
   $("autoThr").checked = false;
   syncNums();
-  if (audioBuf && guard()) rebuild();
+  if (audioBuf && guard()) settingsChanged();
 };
 $("autoThr").onchange = () => {
   $("nthr").disabled = $("autoThr").checked;
-  if (audioBuf && guard()) rebuild();
+  if (audioBuf && guard()) settingsChanged();
 };
-$("fill").onchange  = () => { if (audioBuf && guard()) rebuild(); };
-$("noCut").onchange = () => { if (audioBuf && guard()) rebuild(); };
-$("asIs").onchange  = () => { if (audioBuf && guard()) rebuild(); };
+$("fill").onchange  = () => { if (audioBuf && guard()) settingsChanged(); };
+$("noCut").onchange = () => { if (audioBuf && guard()) settingsChanged(); };
+$("asIs").onchange  = () => { if (audioBuf && guard()) settingsChanged(); };
 $("asrMode").onchange = () => { if (engine && srtText.trim() && guard()) runEngine(); };
-$("redo").onclick   = () => { if (audioBuf && guard()) rebuild(); };
+$("redo").onclick   = () => { if (audioBuf && guard()) settingsChanged(); };
 
 /* ============ 말 시작점 감지 · 싱크 진단 (소리를 안 들어도 됨) ============ */
 let onsetCache = null;
@@ -1299,6 +1330,7 @@ async function runEngine(){
     if (Math.abs(info.duration - newBuf.duration) > 0.05)
       msg(`[!] 길이가 다릅니다 (엔진 ${info.duration.toFixed(2)}s / 화면 ${newBuf.duration.toFixed(2)}s). 설정을 확인하세요.`);
     cues = j.cues;
+    cuesStale = false;                       // 오디오와 자막이 다시 같은 계산에서 나왔다
     hist.length = 0; future.length = 0; updHistBtns();
     edited = false; sel = cues.length ? 0 : -1;
     endOffsetSession(); refreshAll();
@@ -1359,7 +1391,7 @@ $("bCapcut").onclick = async () => {
 };
 
 resetControls();      // 모든 컨트롤 정의가 끝난 뒤 기본값으로
-detectEngine();
+enginePromise = detectEngine();
 </script>
 </body>
 </html>

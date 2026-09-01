@@ -107,10 +107,13 @@ def update() -> None:
         remote = fetch(ver_url, token).decode("utf-8", "replace").strip()
     except Exception:
         return                                   # 인터넷 없음 등 — 조용히 넘어간다
-    if not remote or remote == local_version():
+    local = local_version()
+    # 원격이 '더 새로울 때만' 받는다. 같거나 로컬이 더 새로우면 그대로 둔다.
+    # (개발 중인 PC 에서 옛 버전을 덮어쓰는 사고를 막는다)
+    if not remote or remote <= local:
         return
 
-    old = local_version() or "(없음)"
+    old = local or "(없음)"
     log(f"새 버전 {remote} 을 받는 중...")
     try:
         data = fetch(zip_url, token)

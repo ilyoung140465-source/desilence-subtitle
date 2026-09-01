@@ -34,8 +34,20 @@ def desktop() -> Path:
 
 
 def main() -> int:
-    stamp = dt.date.today().strftime("%Y.%m.%d")
-    (APP / "VERSION").write_text(stamp, encoding="utf-8")
+    # 하루에 여러 번 배포해도 버전이 겹치지 않도록 빌드 번호를 붙인다.
+    # 안 붙이면 오늘 이미 받은 PC 가 오늘의 두 번째 수정을 건너뛴다.
+    today = dt.date.today().strftime("%Y.%m.%d")
+    prev = ""
+    vf = APP / "VERSION"
+    if vf.is_file():
+        prev = vf.read_text(encoding="utf-8").strip()
+    if prev.startswith(today):
+        tail = prev[len(today):].lstrip(".")
+        n = int(tail) + 1 if tail.isdigit() else 2
+    else:
+        n = 1
+    stamp = f"{today}.{n:02d}"
+    vf.write_text(stamp, encoding="utf-8")
 
     missing = [f for f in FILES if not (APP / f).is_file()]
     if missing:
