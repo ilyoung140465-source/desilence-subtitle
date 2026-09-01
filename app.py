@@ -10,6 +10,7 @@ app.py - 편집 화면(브라우저 UI)과 파이썬 엔진을 하나로 묶은 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
@@ -28,8 +29,47 @@ VERSION = (APP_DIR / "VERSION").read_text(encoding="utf-8").strip() \
 
 MAX_UPLOAD = 512 * 1024 * 1024          # 512MB
 uploads: dict[str, Path] = {}
+
+# 원본 오디오의 음성 인식 결과를 담아 둔다.
+# 무음 제거 설정을 바꿔도 '원본에서 들리는 말' 은 달라지지 않으므로,
+# 파일당 한 번만 인식하고 시각만 새 타임라인으로 옮긴다.
+# (예전에는 잘라낸 오디오를 매번 다시 인식해서 슬라이더 한 번에 20초씩 걸렸다)
+_asr_cache: "dict[tuple, list]" = {}
+_ASR_MAX = 4
 work_dir = Path(os.environ.get("TEMP", ".")) / "desilence_app"
 work_dir.mkdir(parents=True, exist_ok=True)
+
+
+def source_words(uid: str, pcm, sr: int, ch: int, model: str, language: str):
+    """원본 오디오에서 단어 시각을 얻는다 (같은 파일이면 캐시)."""
+    import desilence as ds
+    import aligner
+    key = (uid, model, language)
+    hit = _asr_cache.get(key)
+    if hit is not None:
+        return hit
+    tmp = work_dir / f"src_{uuid.uuid4().hex}.wav"
+    ds.encode(pcm, sr, ch, tmp)
+    try:
+        words = aligner.transcribe_words(tmp, model_size=model, language=language)
+    finally:
+        tmp.unlink(missing_ok=True)
+    if len(_asr_cache) >= _ASR_MAX:
+        _asr_cache.pop(next(iter(_asr_cache)))
+    _asr_cache[key] = words
+    return words
+
+
+def shift_words(words, tmap):
+    """원본 타임라인의 단어 시각을 잘라낸 뒤 타임라인으로 옮긴다."""
+    import aligner
+    out = []
+    for w in words:
+        s, e = tmap(w.start), tmap(w.end)
+        if e <= s:                     # 통째로 잘려 나간 자리 (있어선 안 되지만 대비)
+            continue
+        out.append(aligner.Word(s, e, w.text))
+    return out
 
 
 def export_root() -> Path:
@@ -127,9 +167,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._err("빈 파일입니다")
         name = self.headers.get("X-Filename", "audio.wav")
         ext = Path(name).suffix or ".wav"
-        key = uuid.uuid4().hex
+        # 내용으로 이름을 정한다. 같은 파일을 다시 올리면 인식 결과를 재사용한다.
+        key = hashlib.sha1(data).hexdigest()[:16]
         p = work_dir / f"{key}{ext}"
-        p.write_bytes(data)
+        if not p.is_file() or p.stat().st_size != len(data):
+            p.write_bytes(data)
         uploads[key] = p
         return self._json({"id": key, "bytes": len(data)})
 
@@ -181,8 +223,8 @@ class Handler(BaseHTTPRequestHandler):
         an = ds.analyze(
             pcm, sr,
             threshold=(None if req.get("auto") else float(req.get("threshold", -30))),
-            min_silence=float(req.get("minSilence", 0.10)),
-            keep_silence=float(req.get("keep", 0.05)),
+            min_silence=float(req.get("minSilence", 0.20)),
+            keep_silence=float(req.get("keep", 0.10)),
             edge_silence=0.05, trim_edges=True)
         tmap = ds.TimeMap(an)
         new_pcm = ds.render(pcm, an)
@@ -209,14 +251,10 @@ class Handler(BaseHTTPRequestHandler):
         out = None
         # 대본을 무시하고 '인식한 그대로' 자막을 만드는 방식
         if req.get("mode") == "asr" and aligner.available():
-            tmp = work_dir / f"asr_{uuid.uuid4().hex}.wav"
-            ds.encode(new_pcm, sr, ch, tmp)
-            try:
-                words = aligner.transcribe_words(
-                    tmp, model_size=req.get("model", "medium"),
-                    language=req.get("language", "ko"))
-            finally:
-                tmp.unlink(missing_ok=True)
+            words = shift_words(
+                source_words(req.get("id", ""), pcm, sr, ch,
+                             req.get("model", "medium"), req.get("language", "ko")),
+                tmap)
             out = []
             buf, start = [], None
             for w in words:
@@ -236,34 +274,30 @@ class Handler(BaseHTTPRequestHandler):
             info.update(method="asr", words=len(words), ratio=1.0)
 
         if out is None and aligner.available() and cues:
-            tmp = work_dir / f"proc_{uuid.uuid4().hex}.wav"
-            ds.encode(new_pcm, sr, ch, tmp)
-            try:
-                words = aligner.transcribe_words(
-                    tmp, model_size=req.get("model", "medium"),
-                    language=req.get("language", "ko"))
-                mapped = []
-                for c in cues:
-                    parts = [x for x in c.text.split(ds.BREAK) if x.strip()]
-                    for part in (parts or [c.text]):
-                        mapped.append(ds.Cue(tmap(c.start), tmap(c.end), part.strip()))
-                ratio, rows = aligner.word_times([c.text for c in mapped], words, total)
-                if rows is None and ratio is not None and ratio < 0.30:
-                    heard = "".join(w.text for w in words)[:40]
-                    return self._err(
-                        f"오디오와 자막이 서로 다른 내용 같습니다 (일치율 {ratio:.0%}). "
-                        f"자막은 '{cues[0].text[:20] if cues else ''}…', "
-                        f"소리는 '{heard}…' 입니다. 파일 짝을 확인하세요.")
-                if rows:
-                    # 앵커는 기본으로 쓰지 않는다 (실측: 0.877 vs 0.918)
-                    if has_times and req.get("anchor"):
-                        ds.anchor_sentences(mapped, rows)
-                    out = ds.resync_by_words(mapped, rows, tmap, max_chars=max_chars,
-                                             min_cue=0.45, total_new=total,
-                                             bias=(-0.03 if has_times else 0.05))
-                    info.update(method="words", ratio=round(ratio, 3), words=len(words))
-            finally:
-                tmp.unlink(missing_ok=True)
+            words = shift_words(
+                source_words(req.get("id", ""), pcm, sr, ch,
+                             req.get("model", "medium"), req.get("language", "ko")),
+                tmap)
+            mapped = []
+            for c in cues:
+                parts = [x for x in c.text.split(ds.BREAK) if x.strip()]
+                for part in (parts or [c.text]):
+                    mapped.append(ds.Cue(tmap(c.start), tmap(c.end), part.strip()))
+            ratio, rows = aligner.word_times([c.text for c in mapped], words, total)
+            if rows is None and ratio is not None and ratio < 0.30:
+                heard = "".join(w.text for w in words)[:40]
+                return self._err(
+                    f"오디오와 자막이 서로 다른 내용 같습니다 (일치율 {ratio:.0%}). "
+                    f"자막은 '{cues[0].text[:20] if cues else ''}…', "
+                    f"소리는 '{heard}…' 입니다. 파일 짝을 확인하세요.")
+            if rows:
+                # 앵커는 기본으로 쓰지 않는다 (실측: 0.877 vs 0.918)
+                if has_times and req.get("anchor"):
+                    ds.anchor_sentences(mapped, rows)
+                out = ds.resync_by_words(mapped, rows, tmap, max_chars=max_chars,
+                                         min_cue=0.45, total_new=total,
+                                         bias=(-0.015 if has_times else 0.065))
+                info.update(method="words", ratio=round(ratio, 3), words=len(words))
 
         if out is None and not has_times:
             return self._err("대본 텍스트는 음성 인식이 있어야 합니다. "

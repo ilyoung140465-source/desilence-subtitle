@@ -129,11 +129,11 @@
       </div>
       <div>
         <label class="f">최소 무음 길이 <input type="number" id="nminSil" class="num" min="0.05" max="3" step="0.01" autocomplete="off"></label>
-        <input type="range" id="minSil" min="0.05" max="2" step="0.05" value="0.10" autocomplete="off">
+        <input type="range" id="minSil" min="0.05" max="2" step="0.05" value="0.20" autocomplete="off">
       </div>
       <div>
         <label class="f">남길 여백 (앞뒤 각각) <input type="number" id="nkeep" class="num" min="0" max="1" step="0.01" autocomplete="off"></label>
-        <input type="range" id="keep" min="0" max="0.6" step="0.01" value="0.05" autocomplete="off">
+        <input type="range" id="keep" min="0" max="0.6" step="0.01" value="0.10" autocomplete="off">
       </div>
       <div>
         <label class="f">자막 최대 글자 수 <input type="number" id="nchars" class="num" min="4" max="40" step="1" autocomplete="off"></label>
@@ -285,7 +285,7 @@ let laneCount = 1, hist = [], future = [];
 let cuesStale = false, engineTimer = null, enginePromise = null;   // 설정이 바뀌어 자막을 다시 만들어야 하는 상태
 
 /* 크롬은 새로고침 때 슬라이더 값을 복원한다. 기본값인 줄 알고 쓰는 사고를 막는다. */
-const DEFAULTS = {thr:-30, minSil:0.10, keep:0.05, chars:10, zoom:120, offset:0, monLat:0};
+const DEFAULTS = {thr:-30, minSil:0.20, keep:0.10, chars:10, zoom:120, offset:0, monLat:0};
 const CHECK_DEFAULTS = {asrMode:false, autoThr:false, fill:true, noCut:false, asIs:false,
                         follow:true, autoPlayCue:true, showOnset:true, autoProcess:true};
 function resetControls(){
@@ -597,7 +597,7 @@ function settingsChanged(){
   rebuild({keepCues: true});    // 오디오·파형만 즉시 갱신
   cuesStale = true;
   drawCues();
-  msg("설정이 바뀌었습니다 — 자막을 다시 계산합니다…");
+  msg("설정이 바뀌었습니다 — 잠시 뒤 자막을 다시 맞춥니다…");
   clearTimeout(engineTimer);
   engineTimer = setTimeout(runEngine, 700);   // 슬라이더를 놓으면 한 번만
 }
@@ -1314,7 +1314,17 @@ async function runEngine(){
   if (!srtText.trim()) return msg("SRT 파일이 필요합니다.");
   const btn = $("bProcess"); btn.disabled = true;
   const t0 = Date.now();
-  msg("엔진이 무음 제거와 자막 분할을 처리하는 중… (60초 영상 기준 20~30초)");
+  // 인식은 GPU 에서도 영상 길이만큼 걸린다. 남은 시간을 보여주지 않으면
+  // 멈춘 것으로 보인다.
+  const est = Math.max(5, Math.round((newBuf ? newBuf.duration : 30) * 1.05 + 3));
+  const tick = () => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    const left = est - s;
+    msg(`자막을 다시 맞추는 중… ${s}초 / 약 ${est}초`
+      + (left > 0 ? ` (${left}초쯤 남음)` : " (거의 다 됐습니다)"));
+  };
+  tick();
+  const ticker = setInterval(tick, 1000);
   try {
     const id = await uploadOriginal();
     const j = await api("/api/process", JSON.stringify({
@@ -1343,6 +1353,7 @@ async function runEngine(){
       + `
 설정: ${settingsLine()}`);
   } catch(e){ msg("실패: " + e.message); }
+  clearInterval(ticker);
   btn.disabled = false;
 }
 $("bProcess").onclick = runEngine;

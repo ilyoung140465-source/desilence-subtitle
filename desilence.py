@@ -911,10 +911,15 @@ def process(audio: Path, args) -> None:
                 print("  [!] faster-whisper 가 없어 음성 인식 분할을 건너뜁니다 "
                       "(pip install faster-whisper)", file=sys.stderr)
             else:
-                words = aligner.transcribe_words(
-                    dst_audio, model_size=args.model, language=args.language,
+                # 원본을 인식하고 시각만 옮긴다.
+                # 잘라낸 것을 인식하면 설정을 바꿀 때마다 다시 인식해야 하고,
+                # 정확도도 같다 (구간별 인식 대조: 둘 다 0.9308).
+                src_words = aligner.transcribe_words(
+                    audio, model_size=args.model, language=args.language,
                     device=args.device, compute_type=args.compute_type,
                     verbose=args.verbose)
+                words = [aligner.Word(tmap(w.start), tmap(w.end), w.text)
+                         for w in src_words if tmap(w.end) > tmap(w.start)]
                 # 원본 시각 -> 편집 후 시각으로 옮긴 자막 구간 기준으로 정렬
                 # 쉼 표시(BREAK)에서 미리 쪼개 두면 그 자리에서 반드시 나뉜다
                 if not has_times:
@@ -1024,9 +1029,9 @@ def main() -> None:
                     help="무음 임계값 dBFS. 'auto' 대신 숫자로 지정 (--auto-threshold 로 자동 계산)")
     ap.add_argument("--auto-threshold", action="store_true",
                     help="임계값을 파일마다 자동 계산 (-t 무시)")
-    ap.add_argument("-m", "--min-silence", type=float, default=0.10,
+    ap.add_argument("-m", "--min-silence", type=float, default=0.20,
                     help="이 길이 이상인 무음만 제거 대상 (초)")
-    ap.add_argument("-k", "--keep-silence", type=float, default=0.05,
+    ap.add_argument("-k", "--keep-silence", type=float, default=0.10,
                     help="자를 때 앞뒤로 남길 여백 (초). 무음이 이 값의 2배로 줄어듭니다")
     ap.add_argument("--edge-silence", type=float, default=0.05,
                     help="파일 맨 앞/뒤 무음을 남길 길이 (초)")
@@ -1062,9 +1067,9 @@ def main() -> None:
     g.add_argument("--anchor", action="store_true",
                    help="문장 첫 단어를 파형에서 잡은 발화 시작에 고정 "
                         "(실측상 정확도가 떨어져 기본은 끔)")
-    g.add_argument("--whisper-bias", type=float, default=-30.0,
+    g.add_argument("--whisper-bias", type=float, default=-15.0,
                    help="자막 전체를 이만큼(ms) 밀어 보정합니다. "
-                        "실측 최적값 -30 (자막이 약간 먼저 뜨는 편이 읽기 좋습니다)")
+                        "실측 최적값 -15 (자막이 약간 먼저 뜨는 편이 읽기 좋습니다)")
     g.add_argument("--trust-shift", type=float, default=0.25,
                    help="비례 추정과 이 값(초) 이상 어긋날 때만 Whisper 결과를 채택")
     g.add_argument("--post-snap", type=float, default=0.0,
