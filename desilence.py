@@ -927,14 +927,18 @@ def process(audio: Path, args) -> None:
                         mapped.append(Cue(tmap(c.start), tmap(c.end), part.strip()))
                 ratio, rows = aligner.word_times([c.text for c in mapped], words, an.new_sec)
                 if rows:
-                    anchored = anchor_sentences(mapped, rows) if has_times else 0
+                    # 문장 시작점 고정은 실측에서 오히려 정확도를 떨어뜨려 기본에서 뺐다
+                    # (구간별 인식 대조: 앵커 0.877 vs 없음 0.918)
+                    anchored = (anchor_sentences(mapped, rows)
+                                if (args.anchor and has_times) else 0)
                     new_cues = resync_by_words(
                         mapped, rows, tmap, max_chars=args.max_chars,
                         min_cue=args.min_cue, total_new=an.new_sec,
                         bias=(args.whisper_bias if has_times
                               else max(args.whisper_bias, 80.0)) / 1000.0)
-                    print(f"  ✓ 음성 인식 기반 분할 (단어 {len(words)}개, 일치율 {ratio:.0%}, "
-                          f"자막 {len(new_cues)}개, 문장 {anchored}개 시작점 고정)")
+                    msg = (f"  ✓ 음성 인식 기반 분할 (단어 {len(words)}개, "
+                           f"일치율 {ratio:.0%}, 자막 {len(new_cues)}개")
+                    print(msg + (f", 문장 {anchored}개 고정)" if anchored else ")"))
                 else:
                     print(f"  [!] 인식 일치율 {ratio:.0%} — 글자 수 기준으로 나눕니다",
                           file=sys.stderr)
@@ -1038,9 +1042,12 @@ def main() -> None:
     g.add_argument("--compute-type", default="auto", help="auto/float16/int8 등")
     g.add_argument("--split", choices=("words", "chars"), default="words",
                    help="words=인식한 단어의 실제 발화 시각으로 나눔, chars=글자 수로 나눔")
-    g.add_argument("--whisper-bias", type=float, default=0.0,
-                   help="Whisper 는 단어 시작을 실제보다 조금 이르게 보고합니다. "
-                        "그만큼(ms) 늦춰 보정합니다")
+    g.add_argument("--anchor", action="store_true",
+                   help="문장 첫 단어를 파형에서 잡은 발화 시작에 고정 "
+                        "(실측상 정확도가 떨어져 기본은 끔)")
+    g.add_argument("--whisper-bias", type=float, default=-30.0,
+                   help="자막 전체를 이만큼(ms) 밀어 보정합니다. "
+                        "실측 최적값 -30 (자막이 약간 먼저 뜨는 편이 읽기 좋습니다)")
     g.add_argument("--trust-shift", type=float, default=0.25,
                    help="비례 추정과 이 값(초) 이상 어긋날 때만 Whisper 결과를 채택")
     g.add_argument("--post-snap", type=float, default=0.0,

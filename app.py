@@ -249,11 +249,12 @@ class Handler(BaseHTTPRequestHandler):
                         mapped.append(ds.Cue(tmap(c.start), tmap(c.end), part.strip()))
                 ratio, rows = aligner.word_times([c.text for c in mapped], words, total)
                 if rows:
-                    if has_times:
+                    # 앵커는 기본으로 쓰지 않는다 (실측: 0.877 vs 0.918)
+                    if has_times and req.get("anchor"):
                         ds.anchor_sentences(mapped, rows)
                     out = ds.resync_by_words(mapped, rows, tmap, max_chars=max_chars,
                                              min_cue=0.45, total_new=total,
-                                             bias=(0.0 if has_times else 0.08))
+                                             bias=(-0.03 if has_times else 0.05))
                     info.update(method="words", ratio=round(ratio, 3), words=len(words))
             finally:
                 tmp.unlink(missing_ok=True)
