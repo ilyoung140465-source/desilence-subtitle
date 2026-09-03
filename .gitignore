@@ -4,3 +4,5 @@ _backup/
 *.zip
 web/*.bak
 .claude/
+desilence_diag.txt
+error.txt
