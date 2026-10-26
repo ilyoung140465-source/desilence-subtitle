@@ -62,6 +62,25 @@ def source_words(uid: str, pcm, sr: int, ch: int, model: str, language: str):
     return words
 
 
+# 타입캐스트로 만든 음성의 단어 시각. 만든 쪽이 직접 준 값이라 인식으로 추정할 필요가 없다.
+# 아직 실측 전이라 보정값은 '약간 먼저' 쪽으로만 둔다 (늦게 뜨면 첫음절이 잘린다).
+TC_BIAS = -0.02
+
+
+def tts_words(uid: str):
+    """이 오디오가 타입캐스트로 만든 것이면 그 단어 시각을, 아니면 None."""
+    import aligner
+    f = work_dir / f"{uid}.tcwords.json"
+    if not uid or not f.is_file():
+        return None
+    try:
+        rows = json.loads(f.read_text(encoding="utf-8"))
+        return [aligner.Word(float(r["start"]), float(r["end"]), str(r["text"]))
+                for r in rows if r.get("text", "").strip()]
+    except Exception:
+        return None
+
+
 def shift_words(words, tmap):
     """원본 타임라인의 단어 시각을 잘라낸 뒤 타임라인으로 옮긴다."""
     import aligner
@@ -136,7 +155,14 @@ class Handler(BaseHTTPRequestHandler):
                 "align": _has("faster_whisper"), "gpu": gpu,
                 "ffmpeg": bool(shutil.which("ffmpeg")),
                 "capcut": _capcut_ready(),
+                "tts": True,
             })
+        if path == "/api/tts/status":
+            return self._tts_status()
+        if path == "/api/tts/voices":
+            return self._tts_voices()
+        if path == "/api/tts/audio":
+            return self._tts_audio()
         rel = "index.html" if path == "/" else path.lstrip("/")
         f = (WEB_DIR / rel).resolve()
         if not str(f).startswith(str(WEB_DIR)) or not f.is_file():
@@ -159,6 +185,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._verify()
             if path == "/api/capcut":
                 return self._capcut()
+            if path == "/api/tts/key":
+                return self._tts_key()
+            if path == "/api/tts/generate":
+                return self._tts_generate()
             return self._err("없는 경로입니다", 404)
         except Exception as e:
             return self._err(f"{type(e).__name__}: {e}", 500)
@@ -251,11 +281,12 @@ class Handler(BaseHTTPRequestHandler):
                 "method": "chars", "ratio": 0.0}
 
         out = None
+        tc = tts_words(req.get("id", ""))          # 타입캐스트로 만든 음성이면 그 시각
         # 대본을 무시하고 '인식한 그대로' 자막을 만드는 방식
-        if req.get("mode") == "asr" and aligner.available():
+        if req.get("mode") == "asr" and (tc or aligner.available()):
             words = shift_words(
-                source_words(req.get("id", ""), pcm, sr, ch,
-                             req.get("model", "medium"), req.get("language", "ko")),
+                tc or source_words(req.get("id", ""), pcm, sr, ch,
+                                   req.get("model", "medium"), req.get("language", "ko")),
                 tmap)
             out = []
             buf, start = [], None
@@ -275,10 +306,10 @@ class Handler(BaseHTTPRequestHandler):
                 out.append(ds.Cue(start, words[-1].end, " ".join(buf)))
             info.update(method="asr", words=len(words), ratio=1.0)
 
-        if out is None and aligner.available() and cues:
+        if out is None and (tc or aligner.available()) and cues:
             words = shift_words(
-                source_words(req.get("id", ""), pcm, sr, ch,
-                             req.get("model", "medium"), req.get("language", "ko")),
+                tc or source_words(req.get("id", ""), pcm, sr, ch,
+                                   req.get("model", "medium"), req.get("language", "ko")),
                 tmap)
             mapped = []
             for c in cues:
@@ -296,10 +327,11 @@ class Handler(BaseHTTPRequestHandler):
                 # 앵커는 기본으로 쓰지 않는다 (실측: 0.877 vs 0.918)
                 if has_times and req.get("anchor"):
                     ds.anchor_sentences(mapped, rows)
+                bias = TC_BIAS if tc else (-0.015 if has_times else 0.065)
                 out = ds.resync_by_words(mapped, rows, tmap, max_chars=max_chars,
-                                         min_cue=0.45, total_new=total,
-                                         bias=(-0.015 if has_times else 0.065))
-                info.update(method="words", ratio=round(ratio, 3), words=len(words))
+                                         min_cue=0.45, total_new=total, bias=bias)
+                info.update(method=("typecast" if tc else "words"),
+                            ratio=round(ratio, 3), words=len(words))
 
         if out is None and not has_times:
             return self._err("대본 텍스트는 음성 인식이 있어야 합니다. "
@@ -316,6 +348,91 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"info": info,
                            "cues": [{"start": c.start, "end": c.end, "text": c.text}
                                     for c in out]})
+
+    # ---------- 타입캐스트 ----------
+    def _tts_status(self):
+        import typecast
+        key = typecast.get_key()
+        if not key:
+            return self._json({"key": False})
+        out = {"key": True, "masked": typecast.masked(key)}
+        try:
+            out["credits"] = typecast.subscription(key)
+        except typecast.TypecastError as e:
+            out["error"] = str(e)
+        return self._json(out)
+
+    def _tts_key(self):
+        import typecast
+        req = json.loads(self._body() or b"{}")
+        key = str(req.get("key", "")).strip()
+        if req.get("clear"):
+            typecast.clear_key()
+            return self._json({"key": False})
+        if not key:
+            return self._err("키를 넣어 주세요.")
+        try:                                   # 저장하기 전에 진짜로 되는 키인지 확인
+            credits = typecast.subscription(key)
+        except typecast.TypecastError as e:
+            return self._err(str(e))
+        typecast.set_key(key)
+        return self._json({"key": True, "masked": typecast.masked(key), "credits": credits})
+
+    def _tts_voices(self):
+        import typecast
+        force = "refresh=1" in self.path
+        try:
+            return self._json({"voices": typecast.list_voices(force=force)})
+        except typecast.TypecastError as e:
+            return self._err(str(e))
+
+    def _tts_generate(self):
+        import typecast
+        req = json.loads(self._body() or b"{}")
+        text = str(req.get("text", ""))
+        try:
+            wav, words, info = typecast.synthesize(
+                text, str(req.get("voiceId", "")),
+                emotion=str(req.get("emotion", "normal")),
+                intensity=float(req.get("intensity", 1.0)),
+                tempo=float(req.get("tempo", 1.0)),
+                pitch=int(req.get("pitch", 0)))
+        except typecast.TypecastError as e:
+            return self._err(str(e))
+        # 업로드와 같은 규칙(내용 해시)으로 저장한다.
+        # 브라우저가 이 음성을 다시 올려도 같은 id 가 되어 단어 시각을 찾는다.
+        key = hashlib.sha1(wav).hexdigest()[:16]
+        f = work_dir / f"{key}.wav"
+        f.write_bytes(wav)
+        (work_dir / f"{key}.tcwords.json").write_text(
+            json.dumps(words, ensure_ascii=False), encoding="utf-8")
+        uploads[key] = f
+        # 돈 내고 만든 원본은 문서 폴더에도 남긴다
+        saved = ""
+        try:
+            d = export_root() / "타입캐스트원본"
+            d.mkdir(parents=True, exist_ok=True)
+            stem = time.strftime("%Y%m%d_%H%M%S") + "_" + \
+                "".join(ch for ch in info["voice"] if ch not in '\\/:*?"<>|')[:20]
+            (d / f"{stem}.wav").write_bytes(wav)
+            (d / f"{stem}.txt").write_text(text, encoding="utf-8")
+            saved = str(d / f"{stem}.wav")
+        except Exception:
+            pass
+        info.update(id=key, saved=saved)
+        try:
+            info["credits"] = typecast.subscription()
+        except typecast.TypecastError:
+            pass
+        return self._json(info)
+
+    def _tts_audio(self):
+        q = self.path.split("?", 1)[1] if "?" in self.path else ""
+        uid = dict(x.split("=", 1) for x in q.split("&") if "=" in x).get("id", "")
+        f = uploads.get(uid)
+        if not f or not f.is_file():
+            return self._err("음성을 찾지 못했습니다", 404)
+        self._send(200, f.read_bytes(), "audio/wav")
 
     def _verify(self):
         """자막이 실제 발화보다 얼마나 앞/뒤인지 자막마다 재서 돌려준다 (수정 안 함)."""

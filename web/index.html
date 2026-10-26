@@ -80,6 +80,18 @@
            border:1px solid var(--line);border-radius:8px;padding:9px 11px;
            font-family:inherit;font-size:14px;line-height:1.5}
   #cueText:focus{outline:none;border-color:var(--accent)}
+  #ttsSec{margin:0 0 16px}
+  #ttsSec textarea,#ttsSec input[type=text],#ttsSec input[type=password],#ttsSec select,
+  #ttsSec input[type=number]{background:#0f1114;color:var(--fg);border:1px solid var(--line);
+           border-radius:8px;padding:8px 10px;font:inherit}
+  #ttsSec textarea{width:100%;min-height:120px;resize:vertical;line-height:1.6;margin-bottom:10px}
+  #ttsSec textarea:focus,#ttsSec input:focus,#ttsSec select:focus{outline:none;border-color:var(--accent)}
+  #ttsSec select{max-width:100%}
+  #ttsVoice{min-width:260px}
+  #ttsSec .sub{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:9px;
+               font-size:12.5px;color:var(--dim)}
+  #ttsSec .sub b{color:var(--fg);font-weight:600}
+  #ttsMsg.err{color:var(--cut)}
   .times{display:flex;gap:14px;font-size:12.5px;color:var(--dim);margin-top:7px;
          font-variant-numeric:tabular-nums}
   .times b{color:var(--fg)}
@@ -109,6 +121,37 @@
 </header>
 
 <main>
+  <section id="ttsSec" class="hidden">
+    <h2>타입캐스트로 음성 만들기</h2>
+    <div id="ttsKeyBox" class="hidden">
+      <div class="row">
+        <input type="password" id="ttsKey" placeholder="타입캐스트 API 키를 붙여넣으세요"
+               autocomplete="off" style="flex:1;min-width:260px">
+        <button id="ttsKeySave" class="primary">키 저장</button>
+      </div>
+      <div class="sub">키는 studio.typecast.ai → API 콘솔에서 발급합니다.
+        이 PC 의 사용자 폴더에만 저장되고 다른 곳으로 보내지 않습니다.</div>
+    </div>
+    <div id="ttsMain" class="hidden">
+      <textarea id="ttsText" placeholder="대본을 붙여넣으세요. 음성과 자막이 함께 만들어집니다." autocomplete="off"></textarea>
+      <div class="row">
+        <input type="text" id="ttsSearch" placeholder="목소리 검색" autocomplete="off" style="width:140px">
+        <select id="ttsVoice" autocomplete="off"></select>
+        <button id="ttsPreview" title="이 목소리 샘플 듣기">미리듣기</button>
+        <select id="ttsEmotion" autocomplete="off" title="감정"></select>
+        <label class="toggle" title="말 빠르기 (1 = 기본)">속도
+          <input type="number" id="ttsTempo" min="0.5" max="2" step="0.05" value="1" autocomplete="off" style="width:72px"></label>
+        <button id="ttsGo" class="primary">음성 만들기</button>
+      </div>
+      <div class="sub">
+        <span id="ttsCount"></span>
+        <span id="ttsMsg"></span>
+        <span style="margin-left:auto" id="ttsCredits"></span>
+        <button id="ttsKeyChange" style="padding:3px 9px;font-size:12px">키 변경</button>
+      </div>
+    </div>
+  </section>
+
   <div class="drop" id="drop">
     <b>오디오와 SRT 파일을 여기에 끌어놓거나 클릭</b><br>
     자막 파일(<code>.srt</code>) 대신 <b>대본 텍스트(<code>.txt</code>)</b> 를 넣어도 됩니다 — 시각은 음성 인식으로 채웁니다.<br>두 개를 한 번에 넣어도 됩니다. 이미 정리한 <code>_clean</code> 파일을 넣고 자막만 다듬어도 됩니다.
@@ -1262,6 +1305,145 @@ $("offReset").onclick = () => {
 };
 
 /* ============================ 로컬 엔진 연동 ============================ */
+
+/* ---- 타입캐스트로 음성 만들기 ----
+   대본 -> 타입캐스트 API -> 음성 + 단어 시각.
+   만든 음성은 파일을 끌어다 놓은 것과 똑같이 편집기로 들어가고,
+   자막은 Whisper 인식 대신 타입캐스트가 준 시각으로 맞춘다. */
+let ttsVoices = [];
+const EMO = {normal:"보통", happy:"밝게", sad:"슬프게", angry:"화나게", whisper:"속삭임",
+             toneup:"톤 높게", tonedown:"톤 낮게", smart:"자동 (문맥)"};
+const AGE = {child:"어린이", teenager:"10대", young_adult:"청년", middle_age:"중년", elder:"노년"};
+const store = {
+  get(k){ try { return localStorage.getItem("tts." + k); } catch(e){ return null; } },
+  set(k, v){ try { localStorage.setItem("tts." + k, v); } catch(e){} },
+};
+const ttsMsg = (s, err) => { const m = $("ttsMsg"); m.textContent = s || ""; m.classList.toggle("err", !!err); };
+
+function showCredits(c){
+  $("ttsCredits").textContent = c
+    ? `남은 크레딧 ${c.left.toLocaleString()} / ${c.total.toLocaleString()} (${c.plan})` : "";
+}
+function ttsCount(){
+  const n = $("ttsText").value.trim().length;
+  $("ttsCount").innerHTML = n ? `<b>${n.toLocaleString()}자</b> · 크레딧 ${n.toLocaleString()} 사용` : "";
+}
+
+async function ttsInit(){
+  $("ttsSec").classList.remove("hidden");
+  let st = {key:false};
+  try { st = await (await fetch("/api/tts/status", {cache:"no-store"})).json(); } catch(e){}
+  $("ttsKeyBox").classList.toggle("hidden", st.key);
+  $("ttsMain").classList.toggle("hidden", !st.key);
+  if (!st.key) return;
+  showCredits(st.credits);
+  if (st.error) ttsMsg(st.error, true);
+  const saved = store.get("text");
+  if (saved && !$("ttsText").value) $("ttsText").value = saved;
+  ttsCount();
+  await loadVoices();
+}
+
+async function loadVoices(refresh){
+  ttsMsg("목소리 목록을 불러오는 중…");
+  try {
+    const r = await fetch("/api/tts/voices" + (refresh ? "?refresh=1" : ""), {cache:"no-store"});
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+    ttsVoices = j.voices;
+    fillVoices();
+    ttsMsg("");
+  } catch(e){ ttsMsg(e.message, true); }
+}
+
+function voiceLabel(v){
+  const bits = [v.name];
+  if (v.custom) bits.push("내 목소리");
+  if (v.gender) bits.push(v.gender === "female" ? "여" : "남");
+  if (v.age && AGE[v.age]) bits.push(AGE[v.age]);
+  return bits.join(" · ");
+}
+function fillVoices(){
+  const q = $("ttsSearch").value.trim().toLowerCase();
+  const keep = $("ttsVoice").value || store.get("voice");
+  const list = ttsVoices.filter(v => !q || (v.name + " " + v.eng + " " + v.useCases.join(" "))
+                                             .toLowerCase().includes(q));
+  $("ttsVoice").innerHTML = list.map(v =>
+    `<option value="${v.id}">${voiceLabel(v).replace(/</g, "&lt;")}</option>`).join("");
+  if (list.some(v => v.id === keep)) $("ttsVoice").value = keep;
+  fillEmotions();
+}
+const curVoice = () => ttsVoices.find(v => v.id === $("ttsVoice").value);
+function fillEmotions(){
+  const v = curVoice();
+  const keep = $("ttsEmotion").value || store.get("emotion") || "normal";
+  const emos = v ? [...v.emotions] : ["normal"];
+  if (v && v.model === "ssfm-v30") emos.push("smart");
+  $("ttsEmotion").innerHTML = emos.map(e => `<option value="${e}">${EMO[e] || e}</option>`).join("");
+  $("ttsEmotion").value = emos.includes(keep) ? keep : "normal";
+  $("ttsPreview").disabled = !(v && v.preview);
+}
+
+let previewAudio = null;
+$("ttsPreview").onclick = () => {
+  const v = curVoice(); if (!v || !v.preview) return;
+  if (previewAudio) { previewAudio.pause(); }
+  previewAudio = new Audio(v.preview); previewAudio.play().catch(() => {});
+};
+$("ttsSearch").oninput = fillVoices;
+$("ttsVoice").onchange = () => { store.set("voice", $("ttsVoice").value); fillEmotions(); };
+$("ttsEmotion").onchange = () => store.set("emotion", $("ttsEmotion").value);
+$("ttsText").oninput = () => { ttsCount(); store.set("text", $("ttsText").value); };
+
+$("ttsKeySave").onclick = async () => {
+  const key = $("ttsKey").value.trim();
+  if (!key) return;
+  $("ttsKeySave").disabled = true;
+  try {
+    await api("/api/tts/key", JSON.stringify({key}), {"Content-Type":"application/json"});
+    $("ttsKey").value = "";
+    await ttsInit();
+  } catch(e){ alert(e.message); }
+  $("ttsKeySave").disabled = false;
+};
+$("ttsKeyChange").onclick = () => {
+  $("ttsKeyBox").classList.remove("hidden");
+  $("ttsMain").classList.add("hidden");
+  $("ttsKey").focus();
+};
+
+$("ttsGo").onclick = async () => {
+  const text = $("ttsText").value.trim();
+  const v = curVoice();
+  if (!text) return ttsMsg("대본을 넣어 주세요.", true);
+  if (!v) return ttsMsg("목소리를 골라 주세요.", true);
+  const btn = $("ttsGo"); btn.disabled = true;
+  const t0 = Date.now();
+  const tick = () => ttsMsg(`음성 만드는 중… ${Math.round((Date.now() - t0) / 1000)}초`);
+  tick(); const timer = setInterval(tick, 1000);
+  try {
+    const tempo = Math.min(2, Math.max(0.5, +$("ttsTempo").value || 1));
+    const j = await api("/api/tts/generate", JSON.stringify({
+      text, voiceId: v.id, emotion: $("ttsEmotion").value, tempo,
+    }), {"Content-Type":"application/json"});
+    clearInterval(timer);
+    showCredits(j.credits);
+    // 만든 음성을 파일을 끌어다 놓은 것처럼 편집기에 넣는다
+    const blob = await (await fetch("/api/tts/audio?id=" + j.id, {cache:"no-store"})).blob();
+    const d = new Date(), pad = n => String(n).padStart(2, "0");
+    const base = `${v.name}_${d.getMonth()+1}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+    if ($("ccName")) $("ccName").value = "";
+    await handle([new File([text], base + ".txt", {type:"text/plain"}),
+                  new File([blob], base + ".wav", {type:"audio/wav"})]);
+    ttsMsg(`완료 — ${j.voice} · ${j.chars.toLocaleString()}자 · ${j.duration.toFixed(1)}초`
+           + (j.saved ? " · 원본은 문서\\CapCut내보내기\\타입캐스트원본 에 저장" : ""));
+  } catch(e){
+    clearInterval(timer);
+    ttsMsg(e.message, true);
+  }
+  btn.disabled = false;
+};
+
 /* app.py 로 실행했을 때만 나타난다. 브라우저 단독 실행이면 조용히 숨는다. */
 let engine = null, lastUpload = null;
 
@@ -1286,6 +1468,7 @@ async function detectEngine(){
     $("bProcess").disabled = false;
     $("verTag").textContent = "버전 " + (engine.version || "?");
     $("bCapcut").disabled = !engine.capcut;
+    if (engine.tts) ttsInit();
   } catch(e){ /* 브라우저로 그냥 연 경우 */ }
 }
 const msg = s => { $("engineMsg").textContent = s; };
@@ -1344,7 +1527,8 @@ async function runEngine(){
     hist.length = 0; future.length = 0; updHistBtns();
     edited = false; sel = cues.length ? 0 : -1;
     endOffsetSession(); refreshAll();
-    const METHOD = {words:"음성 인식 기반 분할 (대본 유지)", asr:"인식한 그대로",
+    const METHOD = {typecast:"타입캐스트가 준 단어 시각 (인식 없이)",
+                    words:"음성 인식 기반 분할 (대본 유지)", asr:"인식한 그대로",
                     chars:"글자 수 기준 분할"};
     msg(`엔진 처리 완료 — ${METHOD[info.method] || info.method}`
       + (info.words ? ` (단어 ${info.words}개, 일치율 ${Math.round(info.ratio*100)}%)` : "")

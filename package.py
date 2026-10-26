@@ -18,7 +18,7 @@ APP = Path(__file__).resolve().parent
 FILES = [
     "desilence.py", "aligner.py", "app.py", "to_capcut.py", "capcut_export.py",
     "setup.py", "package.py", "capcut_skeleton.json", "VERSION", "README.md",
-    "문제 확인.bat", "find_python.bat", "localbin.py",
+    "문제 확인.bat", "find_python.bat", "localbin.py", "typecast.py",
     "app.ico", "updater.py", "update.json", "되돌리기.bat",
     "install.bat", "run.bat", "capcut.bat", "무음제거 열기.bat",
     "web/index.html",
