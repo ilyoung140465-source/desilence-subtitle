@@ -22,6 +22,8 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import localbin  # 프로그램 폴더의 bin/ 을 PATH 에 붙인다
+
 APP_DIR = Path(__file__).resolve().parent
 WEB_DIR = APP_DIR / "web"
 VERSION = (APP_DIR / "VERSION").read_text(encoding="utf-8").strip() \

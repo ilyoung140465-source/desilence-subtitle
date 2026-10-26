@@ -12,6 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import localbin          # 프로그램 폴더의 bin/ 을 PATH 에 붙인다
+
 PKGS = ["numpy", "faster-whisper"]
 CUDA_PKGS = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12"]
 
@@ -89,6 +91,42 @@ def usage() -> None:
 """)
 
 
+
+def fetch_ffmpeg() -> bool:
+    """ffmpeg 을 프로그램 폴더의 bin/ 에 받는다 (시스템은 건드리지 않는다)."""
+    import io
+    import urllib.request
+    import zipfile
+
+    url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+    print("    받는 중 - 106MB, 몇 분 걸립니다...", flush=True)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "desilence-setup"})
+        with urllib.request.urlopen(req, timeout=300) as r:
+            data = r.read()
+    except Exception as e:
+        print(f"    다운로드 실패: {type(e).__name__}")
+        return False
+
+    localbin.BIN.mkdir(parents=True, exist_ok=True)
+    got = 0
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            for n in z.namelist():
+                name = n.rsplit("/", 1)[-1]
+                if name in ("ffmpeg.exe", "ffprobe.exe"):
+                    (localbin.BIN / name).write_bytes(z.read(n))
+                    got += 1
+    except Exception as e:
+        print(f"    압축 풀기 실패: {type(e).__name__}")
+        return False
+    if got < 2:
+        print("    압축 안에서 ffmpeg 을 찾지 못했습니다.")
+        return False
+    print(f"    [O] {localbin.BIN} 에 넣었습니다")
+    return True
+
+
 def main() -> int:
     if "--usage" in sys.argv:
         usage()
@@ -99,18 +137,20 @@ def main() -> int:
     print("=" * 58 + "\n")
     print(f"[O] Python {sys.version.split()[0]}")
 
-    # 1) ffmpeg
+    # 1) ffmpeg — winget 에 기대지 않는다. 없는 PC 도 있고, 설치돼도
+    #    PATH 가 갱신되지 않아 또 막힌다. 프로그램 폴더에 직접 받는다.
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
-        print("[X] ffmpeg 가 없습니다.\n")
-        if shutil.which("winget"):
-            print("    자동 설치를 시도합니다...\n")
-            subprocess.run(["winget", "install", "--id", "Gyan.FFmpeg", "-e",
-                            "--accept-source-agreements", "--accept-package-agreements"])
-            print("\n    설치가 끝났으면 이 창을 닫고 install.bat 을 다시 실행하세요.")
-            print("    (PATH 가 갱신돼야 인식됩니다)")
-        else:
-            print("    https://www.gyan.dev/ffmpeg/builds/ 에서 받아 PATH 에 등록하세요.")
-        return 1
+        print("[X] ffmpeg 가 없습니다. 프로그램 폴더에 직접 받습니다.\n")
+        if not fetch_ffmpeg():
+            print("\n    받지 못했습니다. 인터넷 연결을 확인하세요.")
+            print("    직접 받으려면 https://www.gyan.dev/ffmpeg/builds/ 에서")
+            print("    essentials 압축을 받아 ffmpeg.exe, ffprobe.exe 를")
+            print(f"    {localbin.BIN} 에 넣으세요.")
+            return 1
+        localbin.register()
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            print("    [X] 받았는데도 찾지 못합니다.")
+            return 1
     print("[O] ffmpeg")
 
     # 2) 파이썬 패키지 (이미 있으면 건드리지 않는다 — 기존 환경 보호)

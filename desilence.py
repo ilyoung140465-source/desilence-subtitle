@@ -20,6 +20,8 @@ from typing import Iterable
 
 import numpy as np
 
+import localbin  # 프로그램 폴더의 bin/ 을 PATH 에 붙인다
+
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".mp4"}
 
 

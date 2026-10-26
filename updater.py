@@ -20,13 +20,18 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+try:
+    import localbin      # 한글 출력 보호
+except Exception:
+    pass
+
 APP = Path(__file__).resolve().parent
 CONF = APP / "update.json"
 BACKUP = APP / "_backup"
 TIMEOUT = 3          # 인터넷이 없을 때 오래 기다리지 않는다
 
 # 사용자가 만든 것·환경마다 다른 것은 덮어쓰지 않는다
-KEEP = {"_backup", "__pycache__", "capcut_skeleton.json"}
+KEEP = {"_backup", "__pycache__", "capcut_skeleton.json", "bin"}
 
 
 def log(msg: str) -> None:
