@@ -1329,7 +1329,10 @@ function ttsCount(){
   $("ttsCount").innerHTML = n ? `<b>${n.toLocaleString()}자</b> · 크레딧 ${n.toLocaleString()} 사용` : "";
 }
 
-async function ttsInit(){
+let ttsStarted = false;
+async function ttsInit(again){
+  if (ttsStarted && !again) return;     // 엔진 확인이 여러 번 와도 한 번만
+  ttsStarted = true;
   $("ttsSec").classList.remove("hidden");
   let st = {key:false};
   try { st = await (await fetch("/api/tts/status", {cache:"no-store"})).json(); } catch(e){}
@@ -1402,7 +1405,7 @@ $("ttsKeySave").onclick = async () => {
   try {
     await api("/api/tts/key", JSON.stringify({key}), {"Content-Type":"application/json"});
     $("ttsKey").value = "";
-    await ttsInit();
+    await ttsInit(true);
   } catch(e){ alert(e.message); }
   $("ttsKeySave").disabled = false;
 };
@@ -1458,6 +1461,15 @@ async function detectEngine(){
     const r = await fetch("/api/ping", {cache:"no-store"});
     if (!r.ok) return;
     engine = await r.json();
+    $("verTag").textContent = "버전 " + (engine.version || "?");
+    if (engine.tts) ttsInit();
+    if (!engine.ready){
+      // 엔진이 아직 준비 중이다. 화면은 먼저 쓰게 두고 잠시 뒤 다시 확인한다.
+      $("engineBox").classList.remove("hidden");
+      msg("엔진 준비 중… (처음 켤 때 몇 초 걸립니다)");
+      setTimeout(detectEngine, 1000);
+      return;
+    }
     $("engineBox").classList.remove("hidden");
     const bits = [];
     bits.push(engine.align ? (engine.gpu ? "싱크 보정 준비됨 (GPU)" : "싱크 보정 준비됨 (CPU — 느림)")
@@ -1468,7 +1480,6 @@ async function detectEngine(){
     $("bProcess").disabled = false;
     $("verTag").textContent = "버전 " + (engine.version || "?");
     $("bCapcut").disabled = !engine.capcut;
-    if (engine.tts) ttsInit();
   } catch(e){ /* 브라우저로 그냥 연 경우 */ }
 }
 const msg = s => { $("engineMsg").textContent = s; };

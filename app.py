@@ -143,20 +143,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path == "/api/ping":
-            import shutil
-            gpu = False
-            try:
-                import ctranslate2
-                gpu = ctranslate2.get_cuda_device_count() > 0
-            except Exception:
-                pass
-            return self._json({
-                "app": "desilence", "version": VERSION,
-                "align": _has("faster_whisper"), "gpu": gpu,
-                "ffmpeg": bool(shutil.which("ffmpeg")),
-                "capcut": _capcut_ready(),
-                "tts": True,
-            })
+            # 느린 확인(음성 인식 라이브러리·GPU)은 켜질 때 뒤에서 미리 한다.
+            # 여기서 하면 첫 화면이 10초 넘게 비어 보인다.
+            st = dict(_status)
+            return self._json({"app": "desilence", "version": VERSION, "tts": True,
+                               "ready": bool(st), **st})
         if path == "/api/tts/status":
             return self._tts_status()
         if path == "/api/tts/voices":
@@ -493,6 +484,22 @@ class Handler(BaseHTTPRequestHandler):
                            "ratio": ratio, "origin": origin})
 
 
+_status: dict = {}
+
+
+def warm_up() -> None:
+    """엔진이 무엇을 할 수 있는지 미리 확인해 둔다 (뒤에서 한 번)."""
+    import shutil
+    gpu = False
+    try:
+        import ctranslate2
+        gpu = ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        pass
+    _status.update(align=_has("faster_whisper"), gpu=gpu,
+                   ffmpeg=bool(shutil.which("ffmpeg")), capcut=_capcut_ready())
+
+
 def _has(mod: str) -> bool:
     try:
         __import__(mod)
@@ -537,6 +544,7 @@ def main() -> None:
     print(f"  {url}")
     print(f"  이 창을 닫으면 프로그램이 종료됩니다.\n")
 
+    threading.Thread(target=warm_up, daemon=True).start()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     time.sleep(0.3)
     if not args.no_browser:
