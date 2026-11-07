@@ -1058,7 +1058,7 @@ def main() -> None:
     g.add_argument("--no-align", dest="align", action="store_false",
                    help="싱크 보정을 끄고 글자 수 비례 추정만 사용")
     g.add_argument("--model", default="medium",
-                   help="Whisper 모델 (tiny/base/small/medium/large-v3). 클수록 정확하고 느림")
+                   help="Whisper 모델 (기본 medium: 실측상 자막 싱크가 가장 정확. large 계열은 단어 시각이 일찍 잡힌다)")
     g.add_argument("--language", default="ko", help="음성 언어 코드")
     g.add_argument("--device", default="auto", help="auto/cuda/cpu")
     g.add_argument("--compute-type", default="auto", help="auto/float16/int8 등")
