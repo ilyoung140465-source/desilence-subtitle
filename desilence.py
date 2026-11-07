@@ -375,48 +375,57 @@ def write_srt(cues: list[Cue], path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# 자막 분할 — 쇼츠 자막 분리 규칙
-#   한 화면에 한 줄. 공백 포함 최대 MAX_CHARS(15)자, 어떤 경우에도 넘지 않는다.
-#   권장 8~13자. 글자 수보다 뜻 덩어리 · 말의 호흡이 먼저지만 최대 글자 수는 절대 조건.
-#   조사와 앞말, 숫자와 단위, 붙어 다니는 말(할 수 / 해 주세요)은 가르지 않는다.
-#   너무 짧게 잘게 나누지 않는다. 원문의 단어 · 어순 · 띄어쓰기는 바꾸지 않는다.
-#   판단 순서: 원문 유지 + 최대 글자 수 > 뜻 덩어리 > 발화 호흡 > 길이 균형
+# 자막 분할 — 자막 분리 판단 우선순위 (사용자 지정)
+#   1. 원문과 어절을 온전히 유지한다 (띄어쓰기 단위로만 나눈다. 단어·어순·띄어쓰기 그대로)
+#   2. 자연스러운 의미 단위 (break_score)
+#   3. 말하는 호흡과 리듬 (실제로 쉬는 자리, chunk_by_words 의 gap_weight)
+#   4. 권장 길이 10~18자 (line_cost) — 화면의 '자막 최대 글자 수' 는 이 권장 상한(기본 18)
+#   5. 자막 간 길이 균형 (line_cost 의 가운데 쏠림, 가장 약하게)
+#   화면 한 줄을 넘지 않게 권장 상한 + 6자(기본 24자)는 넘지 않는다 (hard_limit).
+#   그보다 긴 어절 하나만 예외로 자른다 (사실상 긴 주소·영문뿐).
 # --------------------------------------------------------------------------
 
-MAX_CHARS = 15
+MAX_CHARS = 18
+HARD_EXTRA = 6
+
+
+def hard_limit(max_chars: int) -> int:
+    """한 줄이 절대 넘지 않는 길이 (권장 상한 + 6)."""
+    return max_chars + HARD_EXTRA
 
 
 def target_range(max_chars: int) -> tuple[int, int]:
-    """권장 길이. 최대 15자면 8~13자 (최대 글자 수를 바꾸면 같은 비율로)."""
-    hi = max(1, max_chars - 2)
-    lo = min(hi, max(3, round(max_chars * 8 / 15)))
+    """권장 길이. 권장 상한 18자면 10~18자 (상한을 바꾸면 같은 비율로)."""
+    hi = max(1, max_chars)
+    lo = min(hi, max(3, round(max_chars * 10 / 18)))
     return lo, hi
 
 
 def line_cost(width: int, max_chars: int) -> float:
-    """자막 한 줄 길이의 비용. 최대를 넘으면 쓸 수 없다 (무한대)."""
-    if width > max_chars:
+    """자막 한 줄 길이의 비용 (4·5순위라 의미 단위·호흡보다 약하다). 한 줄 상한을 넘으면 쓸 수 없다."""
+    if width > hard_limit(max_chars):
         return float("inf")
     lo, hi = target_range(max_chars)
     if width > hi:
-        return 4.0 * (width - hi) ** 2            # 14자 4, 15자 16: 뜻을 살리려면 써도 된다
+        return 6.0 * (width - hi) ** 2            # 19자 6, 20자 24, 21자 54: 뜻 때문일 때만
     if width < lo:
-        return 2.0 * (lo - width) ** 2            # 7자 2, 5자 18, 3자 50: 너무 짧은 자막 피함
-    return 0.3 * (width - (lo + hi) / 2) ** 2     # 권장 범위 안은 거의 같게 본다
+        return 1.5 * (lo - width) ** 2            # 9자 1.5, 8자 6, 6자 24, 4자 54
+    return 0.1 * (width - (lo + hi) / 2) ** 2     # 5순위 균형: 권장 범위 안에서 가운데로 아주 약하게
 
 
 def split_word(w: str, max_chars: int) -> list[str]:
-    """단어 하나가 최대 글자 수보다 길 때만 (예: 긴 영문·주소) 고르게 자른다."""
-    if len(w) <= max_chars:
+    """어절은 자르지 않는다. 한 줄 상한보다 긴 어절(긴 주소·영문)만 예외로 고르게 자른다."""
+    limit = hard_limit(max_chars)
+    if len(w) <= limit:
         return [w]
-    n = -(-len(w) // max_chars)
+    n = -(-len(w) // limit)
     size = -(-len(w) // n)
     return [w[i:i + size] for i in range(0, len(w), size)]
 
 
 def _balance(words: list[str], max_chars: int, hard_max: int | None = None) -> list[str]:
-    """단어를 유지한 채, 뜻이 끊기지 않고 길이가 권장 범위에 들도록 DP 로 분할.
-    hard_max 는 예전 호출과 맞추려고 남겨 둔 인자다. 최대 글자 수는 max_chars 하나다."""
+    """어절을 유지한 채, 뜻이 끊기지 않고 길이가 권장 범위에 들도록 DP 로 분할.
+    hard_max 는 예전 호출과 맞추려고 남겨 둔 인자다 (상한은 hard_limit(max_chars))."""
     words = [p for w in words for p in split_word(w, max_chars)]
     n = len(words)
     if n == 0:
@@ -432,7 +441,7 @@ def _balance(words: list[str], max_chars: int, hard_max: int | None = None) -> l
     for i in range(1, n + 1):
         for j in range(i - 1, -1, -1):
             width = pre[i] - pre[j] + (i - j - 1)          # 공백 포함 길이
-            if width > max_chars:
+            if width > hard_limit(max_chars):
                 break                                       # 더 넓어지기만 하므로 중단
             c = line_cost(width, max_chars)
             if j > 0:
@@ -471,7 +480,7 @@ def clean_text(s: str) -> str:
 
 
 def split_text(text: str, max_chars: int = MAX_CHARS, hard_max: int | None = None) -> list[str]:
-    """공백 기준 단어를 유지하며 나눈다. 어느 줄도 max_chars 를 넘지 않는다."""
+    """공백 기준 어절을 유지하며 나눈다. max_chars 는 권장 상한, 한 줄 상한은 hard_limit."""
     hard_max = max_chars
     # 쉼 표시가 있으면 그 지점에서 반드시 끊는다 (실제 오디오에도 쉼이 있다)
     if BREAK in text:
@@ -486,10 +495,10 @@ def split_text(text: str, max_chars: int = MAX_CHARS, hard_max: int | None = Non
 
 
 def enforce_max(cues: list["Cue"], max_chars: int) -> int:
-    """마지막 검증: 최대 글자 수를 넘는 자막이 있으면 다시 나눈다 (시간은 글자 수 비례). 나눈 개수."""
+    """마지막 검증: 한 줄 상한을 넘는 자막이 있으면 다시 나눈다 (시간은 글자 수 비례). 나눈 개수."""
     out, n = [], 0
     for c in cues:
-        if len(c.text) <= max_chars:
+        if len(c.text) <= hard_limit(max_chars):
             out.append(c)
             continue
         parts = split_text(c.text, max_chars)
@@ -808,7 +817,7 @@ def split_row(row, max_chars: int):
     return out
 
 
-def chunk_by_words(row, max_chars: int, hard_max: int | None = None, gap_weight: float = 15.0):
+def chunk_by_words(row, max_chars: int, hard_max: int | None = None, gap_weight: float = 30.0):
     """
     단어별 실제 발화 시각을 근거로 자막을 나눈다.
 
@@ -838,12 +847,12 @@ def chunk_by_words(row, max_chars: int, hard_max: int | None = None, gap_weight:
     for i in range(1, n + 1):
         for j in range(i - 1, -1, -1):
             width = pre[i] - pre[j] + (i - j - 1)
-            if width > max_chars:
-                break                # 최대 글자 수는 절대 넘지 않는다 (긴 단어는 split_row 가 미리 쪼갬)
+            if width > hard_limit(max_chars):
+                break                # 한 줄 상한은 넘지 않는다 (상한보다 긴 어절은 split_row 가 미리 쪼갬)
             c = line_cost(width, max_chars)
             if j > 0:            # 각 경계는 '어떤 줄의 시작' 으로 딱 한 번만 평가한다
                 c += break_score(ws[j - 1], ws[j])
-                c -= gap_weight * min(gap[j], 0.5)   # 실제로 쉬는 자리면 보상
+                c -= gap_weight * min(gap[j], 0.5)   # 3순위 호흡: 실제로 쉬는 자리면 보상 (최대 15점)
             if cost[j] + c < cost[i]:
                 cost[i] = cost[j] + c
                 back[i] = j
@@ -1137,7 +1146,7 @@ def main() -> None:
     ap.add_argument("--fade", type=float, default=4.0, help="이음새 micro-fade 길이 (ms)")
 
     ap.add_argument("-c", "--max-chars", type=int, default=MAX_CHARS,
-                    help="자막 한 줄 최대 글자 수 (공백 포함, 절대 넘지 않음. 권장 길이는 최대의 약 8/15 ~ 최대-2)")
+                    help="자막 권장 최대 글자 수 (공백 포함, 기본 18 → 권장 10~18자, 한 줄 상한 +6자)")
     ap.add_argument("--min-cue", type=float, default=0.45, help="자막 최소 노출 시간 (초)")
     ap.add_argument("--raw-text", action="store_true",
                     help="대본 표기를 그대로 둠 (기본은 '-' 쉼 표시 등을 정리)")
