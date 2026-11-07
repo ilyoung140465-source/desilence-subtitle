@@ -179,8 +179,8 @@
         <input type="range" id="keep" min="0" max="0.6" step="0.01" value="0.10" autocomplete="off">
       </div>
       <div>
-        <label class="f">자막 최대 글자 수 <input type="number" id="nchars" class="num" min="4" max="40" step="1" autocomplete="off"></label>
-        <input type="range" id="chars" min="6" max="24" step="1" value="10" autocomplete="off">
+        <label class="f">자막 최대 글자 수 (공백 포함, 넘지 않음) <input type="number" id="nchars" class="num" min="4" max="40" step="1" autocomplete="off"></label>
+        <input type="range" id="chars" min="6" max="24" step="1" value="15" autocomplete="off">
         <label class="toggle" style="margin-top:5px">
           <input type="checkbox" id="fill" checked autocomplete="off"> 자막 빈틈 없이 붙이기
         </label>
@@ -286,6 +286,14 @@
       <button id="dlSrt">SRT 다운로드</button>
     </div>
     <div class="hint" id="srtInfo"></div>
+    <div id="slashBox" class="hidden" style="margin-top:10px">
+      <div class="row" style="justify-content:space-between">
+        <span class="hint" style="margin:0">자막 한 줄 보기 (/ 로 구분)</span>
+        <button id="cpSlash" style="padding:4px 10px;font-size:12px">복사</button>
+      </div>
+      <div id="slashLine" style="margin-top:6px;padding:9px 11px;background:#0f1114;border:1px solid var(--line);
+           border-radius:8px;font-size:13px;line-height:1.7;word-break:keep-all"></div>
+    </div>
 
     <div id="engineBox" class="hidden" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
       <div class="row">
@@ -328,7 +336,7 @@ let laneCount = 1, hist = [], future = [];
 let cuesStale = false, engineTimer = null, enginePromise = null;   // 설정이 바뀌어 자막을 다시 만들어야 하는 상태
 
 /* 크롬은 새로고침 때 슬라이더 값을 복원한다. 기본값인 줄 알고 쓰는 사고를 막는다. */
-const DEFAULTS = {thr:-30, minSil:0.20, keep:0.10, chars:10, zoom:120, offset:0, monLat:0};
+const DEFAULTS = {thr:-30, minSil:0.20, keep:0.10, chars:15, zoom:120, offset:0, monLat:0};
 const CHECK_DEFAULTS = {asrMode:false, autoThr:false, fill:true, noCut:false, asIs:false,
                         follow:true, autoPlayCue:true, showOnset:true, autoProcess:true};
 function resetControls(){
@@ -546,7 +554,15 @@ function fmtTs(t){
 }
 const toSRT = cs => cs.map((c,i) => `${i+1}\n${fmtTs(c.start)} --> ${fmtTs(c.end)}\n${c.text}\n`).join("\n");
 
-function balance(words, maxC, hardMax){
+/* 자막 길이 규칙 (desilence.py line_cost 와 같다): 최대는 절대 넘지 않고, 권장은 최대 15자일 때 8~13자 */
+function lineCost(w, maxC){
+  if (w > maxC) return Infinity;
+  const hi = Math.max(1, maxC-2), lo = Math.min(hi, Math.max(3, Math.round(maxC*8/15)));
+  if (w > hi) return 10*(w-hi)**2;
+  if (w < lo) return 3*(lo-w)**2;
+  return 0.5*(w-(lo+hi)/2)**2;
+}
+function balance(words, maxC){
   const n = words.length; if (!n) return [];
   const pre = [0];
   for (let k=0;k<n;k++) pre.push(pre[k]+words[k].length);
@@ -554,8 +570,8 @@ function balance(words, maxC, hardMax){
   cost[0] = 0;
   for (let i=1;i<=n;i++) for (let j=i-1;j>=0;j--){
     const w = pre[i]-pre[j]+(i-j-1);
-    if (w > hardMax && j < i-1) break;
-    const c = w<=maxC ? (maxC-w)**2 : (w<=hardMax ? (3*(w-maxC))**2 : 1e4);
+    if (w > maxC) break;
+    const c = lineCost(w, maxC);
     if (cost[j]+c < cost[i]){ cost[i] = cost[j]+c; back[i] = j; }
   }
   const o = []; let i = n;
@@ -563,16 +579,13 @@ function balance(words, maxC, hardMax){
   return o.reverse();
 }
 function splitText(text, maxC){
-  const hardMax = maxC+4, words = text.trim().split(/\s+/).filter(Boolean);
-  const out = []; let buf = [];
-  for (let w of words){
-    if (w.length > hardMax){
-      out.push(...balance(buf,maxC,hardMax)); buf = [];
-      while (w.length > hardMax){ out.push(w.slice(0,maxC)); w = w.slice(maxC); }
-      if (w) buf.push(w);
-    } else buf.push(w);
+  const words = [];
+  for (const w of text.trim().split(/\s+/).filter(Boolean)){
+    if (w.length <= maxC){ words.push(w); continue; }
+    const n = Math.ceil(w.length/maxC), size = Math.ceil(w.length/n);   // 긴 단어만 고르게 자름
+    for (let i=0;i<w.length;i+=size) words.push(w.slice(i,i+size));
   }
-  out.push(...balance(buf,maxC,hardMax));
+  const out = balance(words, maxC);
   return out.length ? out : [text.trim()];
 }
 function snapTo(t, db, hop, win, lo, hi){
@@ -723,7 +736,22 @@ function rebuild(opts){
 }
 const fmtDur = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${(s%60).toFixed(2).padStart(5,"0")}`;
 
+/* 자막을 / 로 이어 한 줄로 보여 준다. 최대 글자 수를 넘는 자막(직접 고친 경우)은 빨갛게 */
+function updSlash(){
+  const box = $("slashBox"); if (!box) return;
+  box.classList.toggle("hidden", !cues.length);
+  const max = +$("chars").value;
+  const esc = t => t.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+  $("slashLine").innerHTML = cues.map(c => c.text.length > max
+    ? `<b style="color:var(--cut)" title="${c.text.length}자 — 최대 ${max}자를 넘습니다">${esc(c.text)}</b>` : esc(c.text)).join(" / ");
+}
+$("cpSlash").onclick = () => {
+  navigator.clipboard.writeText(cues.map(c => c.text).join(" / "));
+  $("cpSlash").textContent = "복사됨"; setTimeout(() => { $("cpSlash").textContent = "복사"; }, 1200);
+};
+
 function refreshAll(){
+  updSlash();
   $("sCues").textContent = `${cues.length}개`;
   $("srtInfo").textContent = cues.length
     ? `자막 ${cues.length}개 · 최대 ${$("chars").value}자` + (edited ? " · 직접 수정됨" : "")
@@ -947,6 +975,7 @@ function showSel(){
   } catch(e){ $("conset").textContent = "–"; }
 }
 function refreshInfo(){
+  updSlash();
   $("sCues").textContent = `${cues.length}개`;
   $("srtInfo").textContent = `자막 ${cues.length}개 · 최대 ${$("chars").value}자` + (edited ? " · 직접 수정됨" : "");
 }

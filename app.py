@@ -252,7 +252,7 @@ class Handler(BaseHTTPRequestHandler):
         tmap = ds.TimeMap(an)
         new_pcm = ds.render(pcm, an)
         total = an.new_sec
-        max_chars = int(req.get("maxChars", 10))
+        max_chars = max(4, min(40, int(req.get("maxChars", ds.MAX_CHARS))))
 
         has_times = bool(req.get("hasTimes", True))
         if has_times:
@@ -333,6 +333,7 @@ class Handler(BaseHTTPRequestHandler):
             new_db, _ = ds.frame_db(mono_new, sr)
             out = ds.resync(cues, tmap, max_chars=max_chars, min_cue=0.45, fill=False,
                             new_db=new_db, snap_window=0.20, total_new=total)
+        info["resplit"] = ds.enforce_max(out, max_chars)   # 마지막 검증: 최대 글자 수를 넘는 자막은 다시 나눔
         if not req.get("keepGaps"):
             ds.apply_fill(out, total)
         info["cues"] = len(out)

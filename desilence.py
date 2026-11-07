@@ -375,11 +375,49 @@ def write_srt(cues: list[Cue], path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# 자막 분할 (기본 10자, 단어 안 끊기게)
+# 자막 분할 — 쇼츠 자막 분리 규칙
+#   한 화면에 한 줄. 공백 포함 최대 MAX_CHARS(15)자, 어떤 경우에도 넘지 않는다.
+#   권장 8~13자. 글자 수보다 뜻 덩어리 · 말의 호흡이 먼저지만 최대 글자 수는 절대 조건.
+#   조사와 앞말, 숫자와 단위, 붙어 다니는 말(할 수 / 해 주세요)은 가르지 않는다.
+#   너무 짧게 잘게 나누지 않는다. 원문의 단어 · 어순 · 띄어쓰기는 바꾸지 않는다.
+#   판단 순서: 원문 유지 + 최대 글자 수 > 뜻 덩어리 > 발화 호흡 > 길이 균형
 # --------------------------------------------------------------------------
 
-def _balance(words: list[str], max_chars: int, hard_max: int) -> list[str]:
-    """단어를 유지한 채, 줄 길이가 max_chars 에 고르게 가깝도록 DP 로 분할."""
+MAX_CHARS = 15
+
+
+def target_range(max_chars: int) -> tuple[int, int]:
+    """권장 길이. 최대 15자면 8~13자 (최대 글자 수를 바꾸면 같은 비율로)."""
+    hi = max(1, max_chars - 2)
+    lo = min(hi, max(3, round(max_chars * 8 / 15)))
+    return lo, hi
+
+
+def line_cost(width: int, max_chars: int) -> float:
+    """자막 한 줄 길이의 비용. 최대를 넘으면 쓸 수 없다 (무한대)."""
+    if width > max_chars:
+        return float("inf")
+    lo, hi = target_range(max_chars)
+    if width > hi:
+        return 4.0 * (width - hi) ** 2            # 14자 4, 15자 16: 뜻을 살리려면 써도 된다
+    if width < lo:
+        return 2.0 * (lo - width) ** 2            # 7자 2, 5자 18, 3자 50: 너무 짧은 자막 피함
+    return 0.3 * (width - (lo + hi) / 2) ** 2     # 권장 범위 안은 거의 같게 본다
+
+
+def split_word(w: str, max_chars: int) -> list[str]:
+    """단어 하나가 최대 글자 수보다 길 때만 (예: 긴 영문·주소) 고르게 자른다."""
+    if len(w) <= max_chars:
+        return [w]
+    n = -(-len(w) // max_chars)
+    size = -(-len(w) // n)
+    return [w[i:i + size] for i in range(0, len(w), size)]
+
+
+def _balance(words: list[str], max_chars: int, hard_max: int | None = None) -> list[str]:
+    """단어를 유지한 채, 뜻이 끊기지 않고 길이가 권장 범위에 들도록 DP 로 분할.
+    hard_max 는 예전 호출과 맞추려고 남겨 둔 인자다. 최대 글자 수는 max_chars 하나다."""
+    words = [p for w in words for p in split_word(w, max_chars)]
     n = len(words)
     if n == 0:
         return []
@@ -394,14 +432,9 @@ def _balance(words: list[str], max_chars: int, hard_max: int) -> list[str]:
     for i in range(1, n + 1):
         for j in range(i - 1, -1, -1):
             width = pre[i] - pre[j] + (i - j - 1)          # 공백 포함 길이
-            if width > hard_max and j < i - 1:
+            if width > max_chars:
                 break                                       # 더 넓어지기만 하므로 중단
-            if width <= max_chars:
-                c = float((max_chars - width) ** 2)
-            elif width <= hard_max:
-                c = float((2 * (width - max_chars)) ** 2)
-            else:
-                c = 1e4                                     # 단어 하나가 이미 너무 긴 경우
+            c = line_cost(width, max_chars)
             if j > 0:
                 c += break_score(words[j - 1], words[j])     # 뜻이 끊기지 않는 자리 우선
             if cost[j] + c < cost[i]:
@@ -437,10 +470,9 @@ def clean_text(s: str) -> str:
     return s.strip()
 
 
-def split_text(text: str, max_chars: int = 10, hard_max: int | None = None) -> list[str]:
-    """공백 기준 단어를 유지하며 max_chars 근처로 균등 분할."""
-    if hard_max is None:
-        hard_max = max_chars + 4
+def split_text(text: str, max_chars: int = MAX_CHARS, hard_max: int | None = None) -> list[str]:
+    """공백 기준 단어를 유지하며 나눈다. 어느 줄도 max_chars 를 넘지 않는다."""
+    hard_max = max_chars
     # 쉼 표시가 있으면 그 지점에서 반드시 끊는다 (실제 오디오에도 쉼이 있다)
     if BREAK in text:
         out: list[str] = []
@@ -450,21 +482,26 @@ def split_text(text: str, max_chars: int = 10, hard_max: int | None = None) -> l
         return out or [text.replace(BREAK, " ").strip()]
     words = [w for w in re.split(r"\s+", text.strip()) if w]
 
-    chunks: list[str] = []
-    buf: list[str] = []
-    for w in words:
-        if len(w) > hard_max:            # 한 단어가 이미 너무 길면 그것만 강제로 자름
-            chunks += _balance(buf, max_chars, hard_max)
-            buf = []
-            while len(w) > hard_max:
-                chunks.append(w[:max_chars])
-                w = w[max_chars:]
-            if w:
-                buf.append(w)
-        else:
-            buf.append(w)
-    chunks += _balance(buf, max_chars, hard_max)
-    return chunks or [text.strip()]
+    return _balance(words, max_chars) or [text.strip()]
+
+
+def enforce_max(cues: list["Cue"], max_chars: int) -> int:
+    """마지막 검증: 최대 글자 수를 넘는 자막이 있으면 다시 나눈다 (시간은 글자 수 비례). 나눈 개수."""
+    out, n = [], 0
+    for c in cues:
+        if len(c.text) <= max_chars:
+            out.append(c)
+            continue
+        parts = split_text(c.text, max_chars)
+        ws = [max(1, len(p.replace(" ", ""))) for p in parts]
+        tot, acc, span = sum(ws), 0, c.end - c.start
+        for p, w in zip(parts, ws):
+            s = c.start + span * acc / tot
+            acc += w
+            out.append(Cue(s, c.start + span * acc / tot, p))
+        n += 1
+    cues[:] = out
+    return n
 
 
 def weight(s: str) -> float:
@@ -681,7 +718,33 @@ GOOD_END = ("요", "다", "죠", "까", "군", "네", "지", "고", "서", "며"
 PUNCT_END = (".", "!", "?", ",", "…")
 # 뒷말에 붙어야 하는 말. 이런 말로 줄이 끝나면 뜻이 잘린다. ("... 거 안 / 써본 게")
 FORWARD = {"안", "못", "잘", "더", "좀", "또", "그", "이", "저", "새", "온",
-           "한", "두", "세", "네", "몇", "무슨", "어떤", "다른", "같은", "매"}
+           "한", "두", "세", "네", "몇", "무슨", "어떤", "다른", "같은", "매",
+           "제", "내", "네", "우리", "저희", "너무", "진짜", "정말", "완전", "딱", "꼭", "단", "약", "총",
+           "싹", "쏙", "꽉", "확", "쭉", "푹", "다", "막", "바로", "그냥", "절대", "얼른", "미리", "계속"}
+
+
+# 숫자로 된 말: '2만', '9.5', '몇만', '수십' (뒤에 단위가 오면 붙여 둔다)
+NUM_WORD = re.compile(r"[\d.,]+[십백천만억]?|[몇수]?[십백천만억]+|몇")
+# 숫자 뒤에 오는 단위·말 ('2만 / 원대', '3 / 개월' 처럼 가르지 않는다)
+UNIT_HEAD = re.compile(r"^(원|개|명|번|년|월|일|시|분|초|살|세|배|위|등|대|권|병|장|잔|마리|가지|차|회|층|평|kg|g|mg|ml|l|cm|mm|m|km|%|퍼센트|프로)",
+                       re.I)
+# 앞 동사에 붙는 보조용언 ('해 / 주세요', '먹어 / 봤어요' 처럼 가르지 않는다)
+AUX_HEAD = ("있", "없", "주", "줘", "줬", "드리", "드려", "보", "봐", "봤", "싶", "않", "말", "버리", "버려", "버렸",
+            "놓", "놔", "두", "둬", "가", "갔", "오", "왔", "하", "한", "할", "합", "해", "했", "지", "져", "졌",
+            "되", "돼", "됐")
+AUX_PREV_END = ("아", "어", "여", "해", "워", "와", "고", "게", "지", "져", "봐", "줘", "러", "려", "야")
+# 꾸며 주는 말로 끝나는 자리 ('소중한 / 사진', '싶은 / 분들' 처럼 꾸밈말과 받는 말을 가르지 않는다)
+ADNOMINAL_END = ("은", "는", "던", "을", "인", "운", "한", "될", "할", "울", "갈", "볼", "올", "줄")
+# 의존 명사 뒤에 붙는 조사·어미 ('거죠', '분들', '수가', '때는')
+# 앞의 숫자·때에 기대는 말 ('7일 / 전', '1분 / 만에')
+LEAN_BACK = {"전", "후", "뒤", "동안", "만에", "째", "간", "정도", "가량", "쯤", "이상", "이하", "이내"}
+# 조사·어미로 끝나지 않은 말 = 맨 이름씨·어찌씨 ('혈당 / 수치', '애들 / 가방', '그냥 / 흔들리는').
+# 이 뒤에서 끊으면 이름씨 덩어리가 깨지기 쉽다.
+ENDING_CHARS = set("은는이가을를에도만로서의와과랑께요다죠고며면데니까게지야봐래네군든나여어아해워와러려자엔선던한할운인될줄갈볼올울쥬용터럼록")
+# '꽂기만 / 하면', '먹기도 / 해요' 처럼 이름꼴 + 하다
+NOMINAL_END = ("기만", "기도", "기는", "기를", "기라도")
+DEP_TAIL = {"", "이", "가", "은", "는", "을", "를", "에", "도", "만", "들", "죠", "요", "야", "지", "예요", "이에요",
+            "입니다", "이죠", "이다", "까지", "부터", "처럼", "으로", "로", "에서", "엔", "이라", "라"}
 
 
 def break_score(prev_w: str, next_w: str) -> float:
@@ -690,24 +753,62 @@ def break_score(prev_w: str, next_w: str) -> float:
     자막은 읽고 바로 이해돼야 하므로, 뜻 덩어리를 깨지 않는 자리를 고른다.
     """
     s = 0.0
-    if next_w in DEPENDENT:
-        s += 45.0                    # '게 / 것 / 수' 로 시작하면 크게 어색하다
-    elif len(next_w) == 1:
+    ended = prev_w.endswith(PUNCT_END)
+    aux = False
+    if NUM_WORD.fullmatch(prev_w) and UNIT_HEAD.match(next_w):
+        s += 60.0                    # 숫자와 단위는 한 덩어리 ('2만 원대', '몇만 원씩', '3 개월')
+    if not ended and re.search(r"\d", prev_w) and next_w in LEAN_BACK:
+        s += 40.0                    # '7일 전', '1분 만에'
+    if not ended and prev_w.endswith(AUX_PREV_END) and next_w.startswith(AUX_HEAD) and len(prev_w) >= 2:
+        s += 28.0                    # '해 주세요', '먹어 봤어요', '하고 싶은', '봐야 한다고'
+        aux = True
+    elif not ended and prev_w.endswith(NOMINAL_END) and next_w.startswith(("하", "해", "했", "한", "할", "합")):
+        s += 28.0                    # '꽂기만 하면'
+        aux = True
+    elif not ended and next_w.startswith(("있", "없")):
+        s += 20.0                    # '관심 있으셨다면', '효과 없으면'
+    if not ended and prev_w.endswith(ADNOMINAL_END) and len(prev_w) >= 2:
+        s += 20.0                    # 꾸밈말 뒤에 받는 말이 와야 뜻이 선다
+    if (not ended and len(prev_w) >= 2 and prev_w[-1] not in ENDING_CHARS
+            and not prev_w[-1].isdigit() and prev_w not in FORWARD):
+        s += 15.0                    # 맨 이름씨 뒤 ('혈당 / 수치', '애들 / 가방')
+    if next_w in DEPENDENT or any(next_w.startswith(d) and next_w[len(d):] in DEP_TAIL for d in DEPENDENT):
+        s += 45.0                    # '게 / 것 / 수 / 거죠 / 분들' 로 시작하면 크게 어색하다
+    elif len(next_w) == 1 and next_w not in FORWARD:   # 제 · 이 · 그 로 줄을 여는 건 자연스럽다
         s += 22.0                    # 한 글자로 줄을 시작하는 것도 피한다
     if prev_w.endswith(PUNCT_END):
         s -= 35.0                    # 문장이 끝난 자리가 가장 좋다
-    elif prev_w.endswith(GOOD_END):
-        s -= 14.0                    # 어미로 끝나면 끊어도 자연스럽다
+    elif prev_w.endswith(GOOD_END) and not aux:
+        s -= 20.0                    # 어미로 끝나면 끊어도 자연스럽다 (뜻 덩어리가 길이보다 먼저)
     if prev_w in DEPENDENT:
         s -= 10.0                    # '...던 게' 처럼 앞말에 붙어 끝나면 좋은 자리다
     elif prev_w in FORWARD:
         s += 45.0                    # '안 / 못 / 한' 으로 줄을 끝내면 뜻이 잘린다
-    elif len(prev_w) == 1:
+    elif len(prev_w) == 1 and prev_w not in LEAN_BACK:  # 7일 전 · 3년 후 로 끝나는 건 괜찮다
         s += 30.0                    # '남 / 새' 처럼 한 글자로 줄을 끝내면 뒷말과 갈라진다
     return s
 
 
-def chunk_by_words(row, max_chars: int, hard_max: int, gap_weight: float = 15.0):
+def split_row(row, max_chars: int):
+    """최대 글자 수보다 긴 단어는 쪼개고, 시각은 글자 수 비례로 나눠 준다."""
+    out = []
+    for w, s, e in row:
+        parts = split_word(w, max_chars)
+        if len(parts) == 1:
+            out.append((w, s, e))
+            continue
+        if s is None or e is None:
+            out += [(p, None, None) for p in parts]
+            continue
+        acc, tot = 0, len(w)
+        for p in parts:
+            ps = s + (e - s) * acc / tot
+            acc += len(p)
+            out.append((p, ps, s + (e - s) * acc / tot))
+    return out
+
+
+def chunk_by_words(row, max_chars: int, hard_max: int | None = None, gap_weight: float = 15.0):
     """
     단어별 실제 발화 시각을 근거로 자막을 나눈다.
 
@@ -737,14 +838,9 @@ def chunk_by_words(row, max_chars: int, hard_max: int, gap_weight: float = 15.0)
     for i in range(1, n + 1):
         for j in range(i - 1, -1, -1):
             width = pre[i] - pre[j] + (i - j - 1)
-            if width > hard_max and j < i - 1:
-                break
-            if width <= max_chars:
-                c = float((max_chars - width) ** 2)
-            elif width <= hard_max:
-                c = float((2 * (width - max_chars)) ** 2)   # 조금 넘는 건 관대하게
-            else:
-                c = 1e4
+            if width > max_chars:
+                break                # 최대 글자 수는 절대 넘지 않는다 (긴 단어는 split_row 가 미리 쪼갬)
+            c = line_cost(width, max_chars)
             if j > 0:            # 각 경계는 '어떤 줄의 시작' 으로 딱 한 번만 평가한다
                 c += break_score(ws[j - 1], ws[j])
                 c -= gap_weight * min(gap[j], 0.5)   # 실제로 쉬는 자리면 보상
@@ -786,12 +882,12 @@ def anchor_sentences(mapped: list[Cue], rows, max_shift: float = 0.4) -> int:
 def resync_by_words(src_cues: list[Cue], rows, tmap: TimeMap, *, max_chars: int,
                     min_cue: float, total_new: float, bias: float = 0.0) -> list[Cue]:
     """Whisper 단어 시각을 1차 근거로 자막을 만든다 (비례 추정을 쓰지 않는다)."""
-    hard_max = max_chars + 4
     out: list[Cue] = []
     for c, row in zip(src_cues, rows):
         if not row:
             continue
-        for a, b in chunk_by_words(row, max_chars, hard_max):
+        row = split_row(row, max_chars)
+        for a, b in chunk_by_words(row, max_chars):
             words = [w for w, _, _ in row[a:b]]
             starts = [s for _, s, _ in row[a:b] if s is not None]
             ends = [e for _, _, e in row[a:b] if e is not None]
@@ -1040,7 +1136,8 @@ def main() -> None:
     ap.add_argument("--no-trim-edges", action="store_true", help="앞뒤 무음을 건드리지 않음")
     ap.add_argument("--fade", type=float, default=4.0, help="이음새 micro-fade 길이 (ms)")
 
-    ap.add_argument("-c", "--max-chars", type=int, default=10, help="자막 한 줄 최대 글자 수")
+    ap.add_argument("-c", "--max-chars", type=int, default=MAX_CHARS,
+                    help="자막 한 줄 최대 글자 수 (공백 포함, 절대 넘지 않음. 권장 길이는 최대의 약 8/15 ~ 최대-2)")
     ap.add_argument("--min-cue", type=float, default=0.45, help="자막 최소 노출 시간 (초)")
     ap.add_argument("--raw-text", action="store_true",
                     help="대본 표기를 그대로 둠 (기본은 '-' 쉼 표시 등을 정리)")
