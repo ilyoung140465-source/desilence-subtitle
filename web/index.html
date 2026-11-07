@@ -179,8 +179,8 @@
         <input type="range" id="keep" min="0" max="0.6" step="0.01" value="0.10" autocomplete="off">
       </div>
       <div>
-        <label class="f">자막 권장 최대 글자 수 (공백 포함) <input type="number" id="nchars" class="num" min="4" max="40" step="1" autocomplete="off"></label>
-        <input type="range" id="chars" min="6" max="30" step="1" value="18" autocomplete="off">
+        <label class="f">자막 최대 글자 수 (공백 포함, 넘지 않음) <input type="number" id="nchars" class="num" min="4" max="40" step="1" autocomplete="off"></label>
+        <input type="range" id="chars" min="6" max="24" step="1" value="15" autocomplete="off">
         <label class="toggle" style="margin-top:5px">
           <input type="checkbox" id="fill" checked autocomplete="off"> 자막 빈틈 없이 붙이기
         </label>
@@ -336,7 +336,7 @@ let laneCount = 1, hist = [], future = [];
 let cuesStale = false, engineTimer = null, enginePromise = null;   // 설정이 바뀌어 자막을 다시 만들어야 하는 상태
 
 /* 크롬은 새로고침 때 슬라이더 값을 복원한다. 기본값인 줄 알고 쓰는 사고를 막는다. */
-const DEFAULTS = {thr:-30, minSil:0.20, keep:0.10, chars:18, zoom:120, offset:0, monLat:0};
+const DEFAULTS = {thr:-30, minSil:0.20, keep:0.10, chars:15, zoom:120, offset:0, monLat:0};
 const CHECK_DEFAULTS = {asrMode:false, autoThr:false, fill:true, noCut:false, asIs:false,
                         follow:true, autoPlayCue:true, showOnset:true, autoProcess:true};
 function resetControls(){
@@ -554,12 +554,11 @@ function fmtTs(t){
 }
 const toSRT = cs => cs.map((c,i) => `${i+1}\n${fmtTs(c.start)} --> ${fmtTs(c.end)}\n${c.text}\n`).join("\n");
 
-/* 자막 길이 규칙 (desilence.py line_cost 와 같다): 어절은 자르지 않고, 권장 10~18자, 한 줄 상한은 권장+6 */
-const HARD_EXTRA = 6;
+/* 자막 길이 규칙 (desilence.py line_cost 와 같다): 어절은 자르지 않고, 최대 15자는 절대 넘지 않고, 권장 10자 이상 */
+const HARD_EXTRA = 0;
 function lineCost(w, maxC){
   if (w > maxC + HARD_EXTRA) return Infinity;
-  const hi = Math.max(1, maxC), lo = Math.min(hi, Math.max(3, Math.round(maxC*10/18)));
-  if (w > hi) return 6*(w-hi)**2;
+  const hi = Math.max(1, maxC), lo = Math.min(hi, Math.max(3, Math.round(maxC*10/15)));
   if (w < lo) return 1.5*(lo-w)**2;
   return 0.1*(w-(lo+hi)/2)**2;
 }
@@ -738,14 +737,14 @@ function rebuild(opts){
 }
 const fmtDur = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${(s%60).toFixed(2).padStart(5,"0")}`;
 
-/* 자막을 / 로 이어 한 줄로 보여 준다. 권장 상한을 넘는 자막은 노랗게 (뜻 때문에 길어진 것) */
+/* 자막을 / 로 이어 한 줄로 보여 준다. 최대 글자 수를 넘는 자막(직접 고친 경우)은 빨갛게 */
 function updSlash(){
   const box = $("slashBox"); if (!box) return;
   box.classList.toggle("hidden", !cues.length);
   const max = +$("chars").value;
   const esc = t => t.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
   $("slashLine").innerHTML = cues.map(c => c.text.length > max
-    ? `<b style="color:var(--head)" title="${c.text.length}자 — 권장 ${max}자보다 깁니다">${esc(c.text)}</b>` : esc(c.text)).join(" / ");
+    ? `<b style="color:var(--cut)" title="${c.text.length}자 — 최대 ${max}자를 넘습니다">${esc(c.text)}</b>` : esc(c.text)).join(" / ");
 }
 $("cpSlash").onclick = () => {
   navigator.clipboard.writeText(cues.map(c => c.text).join(" / "));

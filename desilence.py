@@ -379,25 +379,24 @@ def write_srt(cues: list[Cue], path: Path) -> None:
 #   1. 원문과 어절을 온전히 유지한다 (띄어쓰기 단위로만 나눈다. 단어·어순·띄어쓰기 그대로)
 #   2. 자연스러운 의미 단위 (break_score)
 #   3. 말하는 호흡과 리듬 (실제로 쉬는 자리, chunk_by_words 의 gap_weight)
-#   4. 권장 길이 10~18자 (line_cost) — 화면의 '자막 최대 글자 수' 는 이 권장 상한(기본 18)
+#   4. 권장 길이 10자 이상 (line_cost)
 #   5. 자막 간 길이 균형 (line_cost 의 가운데 쏠림, 가장 약하게)
-#   화면 한 줄을 넘지 않게 권장 상한 + 6자(기본 24자)는 넘지 않는다 (hard_limit).
-#   그보다 긴 어절 하나만 예외로 자른다 (사실상 긴 주소·영문뿐).
+#   그리고 공백 포함 최대 15자는 절대 넘지 않는다 (화면의 '자막 최대 글자 수', hard_limit).
+#   15자보다 긴 어절 하나만 예외로 자른다 (사실상 긴 주소·영문뿐).
 # --------------------------------------------------------------------------
 
-MAX_CHARS = 18
-HARD_EXTRA = 6
+MAX_CHARS = 15
 
 
 def hard_limit(max_chars: int) -> int:
-    """한 줄이 절대 넘지 않는 길이 (권장 상한 + 6)."""
-    return max_chars + HARD_EXTRA
+    """한 줄이 절대 넘지 않는 길이 = 최대 글자 수 (기본 15)."""
+    return max_chars
 
 
 def target_range(max_chars: int) -> tuple[int, int]:
-    """권장 길이. 권장 상한 18자면 10~18자 (상한을 바꾸면 같은 비율로)."""
+    """권장 길이. 최대 15자면 10~15자 (최대를 바꾸면 같은 비율로)."""
     hi = max(1, max_chars)
-    lo = min(hi, max(3, round(max_chars * 10 / 18)))
+    lo = min(hi, max(3, round(max_chars * 10 / 15)))
     return lo, hi
 
 
@@ -406,8 +405,6 @@ def line_cost(width: int, max_chars: int) -> float:
     if width > hard_limit(max_chars):
         return float("inf")
     lo, hi = target_range(max_chars)
-    if width > hi:
-        return 6.0 * (width - hi) ** 2            # 19자 6, 20자 24, 21자 54: 뜻 때문일 때만
     if width < lo:
         return 1.5 * (lo - width) ** 2            # 9자 1.5, 8자 6, 6자 24, 4자 54
     return 0.1 * (width - (lo + hi) / 2) ** 2     # 5순위 균형: 권장 범위 안에서 가운데로 아주 약하게
@@ -780,7 +777,7 @@ def break_score(prev_w: str, next_w: str) -> float:
         s += 20.0                    # 꾸밈말 뒤에 받는 말이 와야 뜻이 선다
     if (not ended and len(prev_w) >= 2 and prev_w[-1] not in ENDING_CHARS
             and not prev_w[-1].isdigit() and prev_w not in FORWARD):
-        s += 15.0                    # 맨 이름씨 뒤 ('혈당 / 수치', '애들 / 가방')
+        s += 25.0                    # 맨 이름씨 뒤 ('혈당 / 수치', '애들 / 가방') — 2순위라 길이(4순위)보다 세게
     if next_w in DEPENDENT or any(next_w.startswith(d) and next_w[len(d):] in DEP_TAIL for d in DEPENDENT):
         s += 45.0                    # '게 / 것 / 수 / 거죠 / 분들' 로 시작하면 크게 어색하다
     elif len(next_w) == 1 and next_w not in FORWARD:   # 제 · 이 · 그 로 줄을 여는 건 자연스럽다
@@ -1146,7 +1143,7 @@ def main() -> None:
     ap.add_argument("--fade", type=float, default=4.0, help="이음새 micro-fade 길이 (ms)")
 
     ap.add_argument("-c", "--max-chars", type=int, default=MAX_CHARS,
-                    help="자막 권장 최대 글자 수 (공백 포함, 기본 18 → 권장 10~18자, 한 줄 상한 +6자)")
+                    help="자막 최대 글자 수 (공백 포함, 기본 15, 절대 넘지 않음. 권장은 10자 이상)")
     ap.add_argument("--min-cue", type=float, default=0.45, help="자막 최소 노출 시간 (초)")
     ap.add_argument("--raw-text", action="store_true",
                     help="대본 표기를 그대로 둠 (기본은 '-' 쉼 표시 등을 정리)")
