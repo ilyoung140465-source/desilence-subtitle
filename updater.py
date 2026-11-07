@@ -99,6 +99,10 @@ def apply_zip(data: bytes) -> int:
 def update() -> None:
     if not CONF.is_file():
         return
+    # 개발 폴더(git 으로 받은 곳)는 건드리지 않는다. 고치던 내용을 zip 으로
+    # 덮어쓰면 사라진다. 개발 폴더는 git pull 로 최신을 받는다.
+    if (APP / ".git").exists():
+        return
     try:
         conf = json.loads(CONF.read_text(encoding="utf-8"))
     except Exception:
